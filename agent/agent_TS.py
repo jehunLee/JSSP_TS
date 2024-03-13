@@ -55,7 +55,6 @@ class AgentTS():
         return actions
 
 
-
 if __name__ == '__main__':
     from utils import all_benchmarks, HUN_100
 
