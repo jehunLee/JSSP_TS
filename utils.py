@@ -348,6 +348,18 @@ def get_quantile_weighted(v_list: list):
 
     return v
 
+from math import exp
+def get_quantile_LB(LB, v_list: list):
+    N = len(v_list)
+    v_list.sort(reverse=True)
+    tau = [exp((2*i+1)/2/N) - 1 for i in range(N)]
+    tau = [round(tau_/sum(tau), 3) for tau_ in tau]
+    v = 0
+    for i, w in enumerate(tau):
+        v += (w * (LB + v_list[i]) / 2)
+
+    return v
+
 
 from scipy.stats import beta, norm, gamma, t, chi2
 

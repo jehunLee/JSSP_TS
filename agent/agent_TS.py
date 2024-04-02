@@ -2,7 +2,7 @@ from params import configs
 import torch, time
 from agent_GNN import AgentGNN
 from environment.env import JobShopEnv
-from utils import get_quantile_beta, get_quantile_norm, get_quantile_weighted
+from utils import get_quantile_beta, get_quantile_norm, get_quantile_weighted, get_quantile_LB, get_quantile_t, get_quantile_chi2
 
 
 class Node():
@@ -52,10 +52,16 @@ class Node():
                     self.value = get_quantile_beta(self.UBs)
                 elif 'norm' in configs.value_type:
                     self.value = get_quantile_norm(self.UBs)
+                elif 't' in configs.value_type:
+                    self.value = get_quantile_t(self.UBs)
+                elif 'chi2' in configs.value_type:
+                    self.value = get_quantile_chi2(self.UBs)
                 elif 'quantile_w' in configs.value_type:
                     self.value = get_quantile_weighted(self.UBs)
+                elif 'quantile_LB' in configs.value_type:
+                    self.value = get_quantile_LB(self.LB, self.UBs)
                 else:
-                    self.value = self.UB
+                    raise NotImplementedError
 
 
 class AgentTS(AgentGNN):
