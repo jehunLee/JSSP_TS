@@ -365,6 +365,9 @@ if __name__ == '__main__':
                 continue
 
             for configs.beam_n in [1, 3, 5]:  # 5
+                if 'with_best' in configs.pruning_type and configs.beam_n == 1 and configs.value_type != 'best':
+                    continue
+
                 for configs.rollout_type in ['multi_model']:  # model_rule, rule, multi_model
                     if 'multi_model' in configs.rollout_type and configs.rollout_n == 1:
                         continue

@@ -348,7 +348,10 @@ def get_quantile_weighted(v_list: list):
 
     return v
 
+
 from math import exp
+
+
 def get_quantile_LB(LB, v_list: list):
     N = len(v_list)
     v_list.sort(reverse=True)
