@@ -10,7 +10,6 @@ from torch_geometric.loader import DataLoader  # https://github.com/pyg-team/pyt
 
 class JobShopEnv:
     def __init__(self, problems: list=[], pomo_n: int=1, load_envs=None):
-        self.M = 1e4
         self.pomo_n = pomo_n
 
         if load_envs:
@@ -32,9 +31,11 @@ class JobShopEnv:
             self.load_problems(problems)
             self.init_index()
 
-        UB = self.init_job_durations.max() * self.max_mc_n * self.max_job_n * self.max_mc_n
-        while UB > self.M:
-            self.M *= 10
+            # etc #########################################################################
+            self.M = 1e4
+            UB = self.init_job_durations.max() * self.max_mc_n * self.max_job_n * self.max_mc_n
+            while UB > self.M:
+                self.M *= 10
 
     def load(self, envs) -> (dict, list):
         # environment ################################################################
@@ -44,19 +45,22 @@ class JobShopEnv:
         self.max_mc_n = envs[0].max_mc_n
 
         self.op_n = envs[0].op_n
-        self.op_map = envs[0].op_map
+        self.op_map = envs[0].op_map.expand(self.env_n, -1, -1)
+
+        self.init_job_durations = envs[0].init_job_durations
+        self.M = envs[0].M
 
         # static #####################################################################
         self.job_durations = envs[0].job_durations.repeat(self.env_n, self.pomo_n, 1, 1)
-        self.job_mcs = envs[0].job_mcs.repeat(self.env_n, self.pomo_n, 1, 1)
-        self.job_step_n = envs[0].job_step_n.repeat(self.env_n, self.pomo_n, 1)
-        self.init_job_step_n = envs[0].init_job_step_n.repeat(self.env_n, 1, 1)
+        self.job_mcs = envs[0].job_mcs.expand(self.env_n, self.pomo_n, -1, -1)
+        self.op_mcs = envs[0].op_mcs.expand(self.env_n, self.pomo_n, -1)
 
-        self.job_tails = envs[0].job_tails.repeat(self.env_n, self.pomo_n, 1, 1)
-        self.job_tail_ns = envs[0].job_tail_ns.repeat(self.env_n, self.pomo_n, 1, 1)
-        self.job_flow_due_date = envs[0].job_flow_due_date.repeat(self.env_n, self.pomo_n, 1, 1)
+        self.job_tails = envs[0].job_tails.expand(self.env_n, self.pomo_n, -1, -1)
+        self.job_tail_ns = envs[0].job_tail_ns.expand(self.env_n, self.pomo_n, -1, -1)
+        self.job_flow_due_date = envs[0].job_flow_due_date.expand(self.env_n, self.pomo_n, -1, -1)
 
-        self.op_mcs = envs[0].op_mcs.repeat(self.env_n, self.pomo_n, 1)
+        self.job_step_n = envs[0].job_step_n.expand(self.env_n, self.pomo_n, -1)
+        self.init_job_step_n = envs[0].init_job_step_n.expand(self.env_n, -1, -1)
 
         # dynamic #####################################################################
         self.job_last_step = torch.cat([env.job_last_step for env in envs], dim=0).repeat(
@@ -68,8 +72,10 @@ class JobShopEnv:
             1, self.pomo_n, 1, 1)
         self.job_ready_t_mc_gap = torch.cat([env.job_ready_t_mc_gap for env in envs], dim=0).repeat(
             1, self.pomo_n, 1, 1)
+
         self.job_done_t = torch.cat([env.job_done_t for env in envs], dim=0).repeat(
             1, self.pomo_n, 1, 1)
+        self.job_arrival_t_ = envs[0].job_arrival_t_.expand(self.env_n, self.pomo_n, -1)
 
         self.mc_last_job = torch.cat([env.mc_last_job for env in envs], dim=0).repeat(
             1, self.pomo_n, 1)
@@ -78,6 +84,8 @@ class JobShopEnv:
 
         self.decision_n = torch.cat([env.decision_n for env in envs], dim=0).repeat(
             1, self.pomo_n)
+        self.reserved = defaultdict(list)
+
         self.target_mc = torch.cat([env.target_mc for env in envs], dim=0).repeat(
             1, self.pomo_n, 1)
         self.op_mask = torch.cat([env.op_mask for env in envs], dim=0).repeat(
@@ -94,9 +102,6 @@ class JobShopEnv:
             self.e_all_pred = defaultdict()
             self.e_all_succ = defaultdict()
             self.e_disj = defaultdict()
-
-            # self.reserved_e_disj = defaultdict()
-            self.reserved = defaultdict()
 
             for i in range(self.env_n):
                 self.e_pred[i] = envs[i].e_pred[0]
@@ -181,34 +186,34 @@ class JobShopEnv:
 
     def init_index(self):
         self.ENV_IDX_J = torch.arange(self.env_n, dtype=torch.long)[:, None, None].expand(
-            self.env_n, self.pomo_n, self.max_job_n+1)
+            -1, self.pomo_n, self.max_job_n+1)
         self.POMO_IDX_J = torch.arange(self.pomo_n, dtype=torch.long)[None, :, None].expand(
-            self.env_n, self.pomo_n, self.max_job_n+1)
+            self.env_n, -1, self.max_job_n+1)
         self.JOB_IDX = torch.arange(self.max_job_n+1, dtype=torch.long)[None, None, :].expand(
-            self.env_n, self.pomo_n, self.max_job_n+1)
+            self.env_n, self.pomo_n, -1)
 
         self.ENV_IDX_M = torch.arange(self.env_n, dtype=torch.long)[:, None, None].expand(
-            self.env_n, self.pomo_n, self.max_mc_n)
+            -1, self.pomo_n, self.max_mc_n)
         self.POMO_IDX_M = torch.arange(self.pomo_n, dtype=torch.long)[None, :, None].expand(
-            self.env_n, self.pomo_n, self.max_mc_n)
+            self.env_n, -1, self.max_mc_n)
 
         self.ENV_IDX_O_ = torch.arange(self.env_n, dtype=torch.long)[:, None, None, None].expand(
-            self.env_n, self.pomo_n, self.max_job_n+1, self.max_mc_n+1)
+            -1, self.pomo_n, self.max_job_n+1, self.max_mc_n+1)
         self.POMO_IDX_O_ = torch.arange(self.pomo_n, dtype=torch.long)[None, :, None, None].expand(
-            self.env_n, self.pomo_n, self.max_job_n+1, self.max_mc_n+1)
+            self.env_n, -1, self.max_job_n+1, self.max_mc_n+1)
 
         self.JOB_STEP_IDX = torch.arange(self.max_mc_n+1, dtype=torch.long)[None, None, None, :].expand(
-            self.env_n, self.pomo_n, self.max_job_n+1, self.max_mc_n+1)
+            self.env_n, self.pomo_n, self.max_job_n+1, -1)
 
         self.ENV_IDX_O = torch.arange(self.env_n, dtype=torch.long)[:, None, None].expand(
-            self.env_n, self.pomo_n, self.op_n)
+            -1, self.pomo_n, self.op_n)
         self.POMO_IDX_O = torch.arange(self.pomo_n, dtype=torch.long)[None, :, None].expand(
-            self.env_n, self.pomo_n, self.op_n)
+            self.env_n, -1, self.op_n)
         self.OP_IDX = torch.arange(self.op_n, dtype=torch.long)[None, None, :].expand(
-            self.env_n, self.pomo_n, self.op_n)
+            self.env_n, self.pomo_n, -1)
 
         self.MC_PRIOR = torch.arange(self.max_mc_n, dtype=torch.long)[None, None, :].flip(dims=[2]) + 1
-        self.MC_PRIOR = self.MC_PRIOR.expand(self.env_n, self.pomo_n, self.max_mc_n)
+        self.MC_PRIOR = self.MC_PRIOR.expand(self.env_n, self.pomo_n, -1)
 
         self.JOB_ONE = torch.full(size=(self.env_n, self.pomo_n, self.max_job_n+1), fill_value=1)
         self.JOB_OP = torch.where(self.JOB_STEP_IDX < self.init_job_step_n.view(
@@ -271,12 +276,13 @@ class JobShopEnv:
         self.job_ready_t_mc_gap = torch.zeros(self.env_n, self.pomo_n, self.max_job_n+1, self.max_mc_n+1,
                                               dtype=torch.long)
         self.job_done_t = self.init_job_done.unsqueeze(dim=1).repeat(1, self.pomo_n, 1, 1)
-        self.job_arrival_t_ = self.init_job_arrival.unsqueeze(dim=1).repeat(1, self.pomo_n, 1)
+        self.job_arrival_t_ = self.init_job_arrival.unsqueeze(dim=1).expand(-1, self.pomo_n, -1)
 
         self.mc_last_job = torch.full(size=(self.env_n, self.pomo_n, self.max_mc_n), fill_value=self.max_job_n)
         self.mc_last_job_step = torch.zeros(self.env_n, self.pomo_n, self.max_mc_n, dtype=torch.long)
 
         self.decision_n = torch.zeros(self.env_n, self.pomo_n, dtype=torch.long)
+        self.reserved = defaultdict(list)
 
     def reset(self):
         self.reset_idxs()
@@ -721,10 +727,9 @@ class JobShopEnv:
         # makespan ##############
         max_done_t = self.job_done_t[self.ENV_IDX_J, self.POMO_IDX_J, self.JOB_IDX, self.job_step_n-1].max(dim=2)[0]
 
-        # total_complete_t ##############
-        done_t = (self.job_done_t[self.ENV_IDX_J, self.POMO_IDX_J, self.JOB_IDX, self.job_step_n-1] -
-                  self.job_arrival_t_)[:, :, :-1]
-        total_c_t = done_t.sum(dim=2)
+        # mean_flow_t ##############
+        mean_f_t = (self.job_done_t[self.ENV_IDX_J, self.POMO_IDX_J, self.JOB_IDX, self.job_step_n-1] -
+                    self.job_arrival_t_)[:, :, :-1].sum(dim=2) / self.max_job_n
 
         # mc LB ##############
         # mc_t = self.job_done_t[self.ENV_IDX_M, self.POMO_IDX_M, self.mc_last_job, self.mc_last_job_step]
@@ -763,6 +768,8 @@ class JobShopEnv:
                 return -1, 3
             elif rule == 'FDD/MWKR':
                 return -1, 4
+            elif rule == 'FIFO':
+                return -1, 5
             else:
                 return 0
 
@@ -783,12 +790,12 @@ class JobShopEnv:
         index_prod = index_prod.view(1, self.pomo_n, 1).expand(self.env_n, -1, op_mask.size()[2])
 
         index = features[self.ENV_IDX_O, self.POMO_IDX_O, self.OP_IDX, index_pos].mul(index_prod)
-        index -= (1 - op_mask) * 1e4
+        index -= (1 - op_mask) * self.M
 
         # tie: FIFO -> SPT
         index_FIFO = -features[self.ENV_IDX_O, self.POMO_IDX_O, self.OP_IDX, 5]
         index_SPT = -features[self.ENV_IDX_O, self.POMO_IDX_O, self.OP_IDX, 0]
-        index += index_FIFO * 1e-4 + index_SPT * 1e-8
+        index += index_SPT / self.M + index_FIFO / self.M / self.M
 
         return self.get_assign_job(index.argmax(dim=2))
 
@@ -807,12 +814,13 @@ class JobShopEnv:
             obs, reward, done = self.step(a)
         return reward, self.decision_n
 
+    #####################################################################################################
     def show_gantt_plotly(self, env_i, pomo_i, title: str=''):
         import pandas as pd
         import plotly.express as px
         import os
 
-        first_list = [(0, 0, 0, 0, 0, 0, "")]
+        first_list = [(0, 0, 0, 0, 0, 0, '')]
         col_name = ['op_i', 'job_id', 'ith', 'resource', 'start_t', 'end_t', 'text']
         df = pd.DataFrame(first_list, columns=col_name)
 
@@ -822,9 +830,11 @@ class JobShopEnv:
         mcs = self.job_mcs[env_i, pomo_i, :, :]
 
         for i in range(self.max_job_n):
-            step_n = self.job_step_n[env_i, pomo_i, i]
-            if step_n:
-                for j in range(step_n):
+            job_last_step = self.job_last_step[env_i, pomo_i, i]
+            # step_n = self.job_step_n[env_i, pomo_i, i]
+            if job_last_step:
+                for j in range(job_last_step):
+
                     op_idx = self.max_job_n * i + j
                     mc_i = mcs[i, j].item()
 
@@ -849,15 +859,15 @@ class JobShopEnv:
         df = df[1:]
         df['delta'] = df['end_t'] - df['start_t']
 
-        fig = px.timeline(df, x_start="start_t", x_end="end_t", y="resource",
-                          color="job_id", text="text", opacity=0.6,
+        fig = px.timeline(df, x_start='start_t', x_end='end_t', y='resource',
+                          color='job_id', text='text', opacity=0.6,
                           color_continuous_scale='rainbow')  # https://plotly.com/python/colorscales/
 
-        fig.update_yaxes(autorange="reversed")
+        fig.update_yaxes(autorange='reversed')
         fig.layout.xaxis.type = 'linear'
         fig.data[0].x = df.delta.tolist()
 
-        fig.update_layout(plot_bgcolor="white",
+        fig.update_layout(plot_bgcolor='white',
                           title={
                               'text': title,
                               'y': 1,
@@ -880,40 +890,21 @@ class JobShopEnv:
 
 
 if __name__ == "__main__":
-    from utils import all_rules, all_benchmarks, action_types, REAL_D, FLOW
+    from utils import rules_5, all_benchmarks, REAL_D, FLOW
     import csv, time
-    import cProfile
-
+    # import cProfile
+    #
     # configs.agent_type = 'rule'
     # # configs.action_type = 'conflict'
     # configs.action_type = 'buffer'
     #
-    # ##############################################
-    # # rules = ['LTT', 'MOR', 'LRPT', 'FDD/MWKR', 'SPT']
-    # # # rules = ['LTT']
-    # # env = JobShopEnv([('TA', 20, 15, 0)], pomo_n=len(rules))
-    # # obs, reward, done = env.reset()
-    # #
-    # # while not done:
-    # #     a = env.get_action_rule(obs, rules)
-    # #     obs, reward, done = env.step(a)
-    # # # env.show_gantt_plotly(0, 0)
-    # # print(reward)
-    # # ##############################################
-    #
-    # # rules = ['LTT', 'MOR', 'FDD/MWKR', 'LRPT', 'SPT']
-    # rules = ['LTT']
-    #
-    # # HUN 4x3_0: 84, 87, 86, 87, 99         / 84, 84, 84, 84, 84             - 84
-    # # HUN 6x6_0: 195, 196, 195, 195, 219    / 168, 171, 173, 185, 168        - 168
-    # # HUN 6x6_1: 196, 194, 206, 196, 207    / 195, 184, 195, 190, 167        - 167
-    # # HUN 8x6_0: 193, 181, 192, 187, 197    / 164, 179, 177, 177, 164        - 164
-    # # TA 15x15_0: 1484, 1438, 1491, 1462    / 1498, 1434, 1397, 1385, 1386   - 1386
+    # rules = ['LTT', 'MOR', 'FDD/MWKR', 'LRPT', 'SPT']
+    # # TA 15x15_0: 1484, 1450, 1422, 1491, 1462
     #
     # def main():
-    #     # env = JobShopEnv([('TA', 15, 15, 0)], pomo_n=len(rules))
+    #     env = JobShopEnv([('TA', 15, 15, 0)], pomo_n=len(rules))
     #     # env = JobShopEnv([('HUN', 4, 3, 0)], pomo_n=len(rules))
-    #     env = JobShopEnv([('TEST', 4, 4, 0)], pomo_n=len(rules))  # paper
+    #     # env = JobShopEnv([('TEST', 4, 4, 0)], pomo_n=len(rules))  # paper
     #
     #     obs, reward, done = env.reset()
     #     while not done:
@@ -922,44 +913,10 @@ if __name__ == "__main__":
     #
     #     print(reward)
     #     # print(env.decision_n)
-    #     # env.show_gantt_plotly(0, 0)
+    #     env.show_gantt_plotly(0, 1)
     #
     # # cProfile.run('main()')
     # main()
-
-    # for configs.action_type in ['single_mc_buffer']:
-    #     save_path = './../result/bench_rule.csv'
-    #
-    #     for (benchmark, job_n, mc_n, instances) in all_benchmarks:
-    #         print(benchmark, job_n, mc_n, instances)
-    #         for i in instances:
-    #             for rule in all_rules:
-    #                 envs_info = [(benchmark, job_n, mc_n, i)]
-    #                 env = JobShopEnv(envs_info, pomo_n=1)
-    #
-    #                 ##############################################
-    #                 s_t = time.time()
-    #                 obs, reward, done = env.reset()
-    #
-    #                 while not done:
-    #                     a = env.get_action_rule(obs, [rule])
-    #                     obs, reward, done = env.step(a)
-    #                 # env.show_gantt_plotly(0, 0)
-    #                 run_t = round(time.time() - s_t, 4)
-    #                 print(run_t)
-                    #############################################
-    #                 print(i, rule, run_t)
-    #                 with open(save_path, 'a', newline='') as f:
-    #                     wr = csv.writer(f)
-    #                     wr.writerow([benchmark, job_n, mc_n, i,
-    #                                  configs.agent_type, configs.action_type, configs.state_type, rule,
-    #                                  -reward[0, 0].item(), run_t])
-
-    # TA 15x15 rule: 0.152s
-    # TA 100x20 rule: 17.6s
-
-    # TA 15x15 rule: 0.075s
-    # TA 100x20 rule: 1.13s
 
 
     ###########################################################################################################
@@ -968,15 +925,16 @@ if __name__ == "__main__":
 
     configs.action_type = 'buffer'
     configs.agent_type = 'rule'
-    rules = all_rules
+    rules = rules_5
     # rules = ['LTT']
 
+    #########################################################
     save_folder = f'./../result/'
     if not os.path.exists(save_folder):
         os.makedirs(save_folder)
-    save_path = save_folder + f'result_rule_flow.csv'
+    save_path = save_folder + f'result_rule_real_d.csv'
 
-    for (benchmark, job_n, mc_n, instances) in all_benchmarks:
+    for (benchmark, job_n, mc_n, instances) in REAL_D:
         print(benchmark, job_n, mc_n, instances)
         for i in tqdm(instances):
             envs_info = [(benchmark, job_n, mc_n, i)]

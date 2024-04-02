@@ -194,11 +194,9 @@ class AgentGNN():
         return model_path
 
     def get_model_name(self) -> str:
-        # model_name = f'{configs.model_type}_{configs.model_global_type} {configs.hi_dim}' \
-        #              f' {configs.loss_type} {configs.lr} {configs.dropout_p} {configs.batch_size}' \
-        #              f' {configs.softmax_tau} {configs.L2_norm_w} {configs.optimizer_type} {configs.attn_head_n}' \
-        #              f' {configs.scheduler_type} {configs.max_ep_n} {configs.training_len} {self.model_i}'
         model_name = 'best'
+        if 'multi_model' in configs.rollout_type:
+            model_name = f'best_{self.model_i}'
         return model_name
 
     def model_save(self) -> None:
@@ -211,6 +209,7 @@ class AgentGNN():
         """ torch model parameter load
         """
         self.model.load_state_dict(torch.load(f'{self.model_path()}.pt'))
+        self.model.to(configs.device)
 
     def models_load(self, model_i_list) -> list:
         """ torch model parameter load
@@ -219,7 +218,7 @@ class AgentGNN():
         for i in model_i_list:
             self.model_i = i
             self.model.load_state_dict(torch.load(f'{self.model_path()}.pt'))
-            models.append(copy.deepcopy(self.model))
+            models.append(copy.deepcopy(self.model).to(configs.device))
 
         return models
 
@@ -282,6 +281,7 @@ class AgentGNN():
         from tqdm import tqdm
         from environment.env import JobShopEnv
         from environment.dyn_env import JobShopDynEnv
+
 
         self.model_load()
         self.model.to(configs.device)

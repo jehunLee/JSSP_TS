@@ -13,6 +13,7 @@ parser.add_argument('--env_type', type=str, default='dyn', help='dynamics of sch
 parser.add_argument('--model_type', type=str, default='type_all_pred_GAT2', help='GNN model type : type_GAT2, type_all_pred_GAT2, type_all_pred_GAT2')
 parser.add_argument('--model_global_type', type=str, default='mean_global', help='global state information of GNN model: mean_global, mmm_global, ')
 parser.add_argument('--action_type', type=str, default='conflict', help='action type of MDP: buffer, conflict')
+parser.add_argument('--agent_type', type=str, default='GNN_BC_policy', help='agent type: GNN_BC_policy, rule')
 
 # dynamic environment
 parser.add_argument('--dyn_type', type=str, default='', help='dynamic environment type: job_arrival, mc_breakdown_known, prt_stochastic_known, ')
@@ -51,6 +52,17 @@ parser.add_argument('--duel_TF', type=bool, default=False, help='duel function o
 parser.add_argument('--sol_type', type=str, default='full_active', help='learning solution type')
 parser.add_argument('--rollout_type', type=str, default='model', help='rollout type: model, rule')
 parser.add_argument('--policy_symmetric_TF', type=bool, default=False, help='learning target ')
+
+#####################################################
+parser.add_argument('--pruning_type', type=str, default='terminal_with_best', help='terminal_with_best, with_best')
+parser.add_argument('--expansion_type', type=str, default='bound_all', help='bound_all, all, bound')
+
+parser.add_argument('--q_level', type=float, default=0.01, help='')
+parser.add_argument('--value_type', type=str, default='quantile_weighted', help='best, mean, quantile_beta, quantile_norm, quantile_weighted')
+
+parser.add_argument('--beam_n', type=int, default=3, help='beam width')
+parser.add_argument('--depth', type=int, default=10000000, help='maximum depth')
+
 
 #####################################################
 configs = parser.parse_args()
