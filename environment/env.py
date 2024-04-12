@@ -303,13 +303,14 @@ class JobShopEnv:
 
     def step(self, a):
         if 'rule' in configs.agent_type:
+            a = self.get_assign_job(a)
             self.assign(a)
         elif self.pomo_n > 1:
             a = self.get_assign_job(torch.concat(a).to('cpu').view(
                 self.pomo_n, self.env_n).transpose(0, 1).contiguous())
             self.assign(a)
         else:
-            a = self.get_assign_job(torch.concat(a).to('cpu').view(self.env_n, 1))
+            a = self.get_assign_job(torch.concat(a).to('cpu').view(self.env_n, -1))
             self.assign(a)
 
         ##############################################################################
@@ -328,6 +329,13 @@ class JobShopEnv:
             reward = None
 
         return self.get_obs(), reward, done
+
+    def get_assign_job(self, selected_index):
+        assign_job = F.one_hot(selected_index, num_classes=self.op_n).view(
+            self.env_n, self.pomo_n, self.max_job_n, -1).max(dim=3)[0].argmax(dim=2)
+        assign_job = assign_job.view(self.env_n, self.pomo_n, 1).expand(-1, -1, self.max_mc_n)
+
+        return torch.where(self.target_mc == 1, assign_job, self.max_job_n)
 
     ########################################################################################################
     def assign(self, mc_job):  # assign for a machine
@@ -728,8 +736,8 @@ class JobShopEnv:
         max_done_t = self.job_done_t[self.ENV_IDX_J, self.POMO_IDX_J, self.JOB_IDX, self.job_step_n-1].max(dim=2)[0]
 
         # mean_flow_t ##############
-        mean_f_t = (self.job_done_t[self.ENV_IDX_J, self.POMO_IDX_J, self.JOB_IDX, self.job_step_n-1] -
-                    self.job_arrival_t_)[:, :, :-1].sum(dim=2) / self.max_job_n
+        # mean_f_t = (self.job_done_t[self.ENV_IDX_J, self.POMO_IDX_J, self.JOB_IDX, self.job_step_n-1] -
+        #             self.job_arrival_t_)[:, :, :-1].sum(dim=2) / self.max_job_n
 
         # mc LB ##############
         # mc_t = self.job_done_t[self.ENV_IDX_M, self.POMO_IDX_M, self.mc_last_job, self.mc_last_job_step]
@@ -797,14 +805,7 @@ class JobShopEnv:
         index_SPT = -features[self.ENV_IDX_O, self.POMO_IDX_O, self.OP_IDX, 0]
         index += index_SPT / self.M + index_FIFO / self.M / self.M
 
-        return self.get_assign_job(index.argmax(dim=2))
-
-    def get_assign_job(self, selected_index):
-        assign_job = F.one_hot(selected_index, num_classes=self.op_n).view(
-            self.env_n, self.pomo_n, self.max_job_n, -1).max(dim=3)[0].argmax(dim=2)
-        assign_job = assign_job.view(self.env_n, self.pomo_n, 1).expand(-1, -1, self.max_mc_n)
-
-        return torch.where(self.target_mc == 1, assign_job, self.max_job_n)
+        return index.argmax(dim=2)
 
     #####################################################################################################
     def run_episode_rule(self, rules):
@@ -812,6 +813,7 @@ class JobShopEnv:
         while not done:
             a = self.get_action_rule(obs, rules)
             obs, reward, done = self.step(a)
+
         return reward, self.decision_n
 
     #####################################################################################################

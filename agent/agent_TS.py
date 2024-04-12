@@ -2,7 +2,8 @@ from params import configs
 import torch, time
 from agent_GNN import AgentGNN
 from environment.env import JobShopEnv
-from utils import get_quantile_beta, get_quantile_norm, get_quantile_weighted, get_quantile_LB, get_quantile_t, get_quantile_chi2
+from utils import get_quantile_beta, get_quantile_norm, get_quantile_weighted, get_quantile_LB, \
+    get_quantile_t, get_quantile_chi2, get_quantile_LB2
 
 
 class Node():
@@ -12,19 +13,19 @@ class Node():
         if obs:
             self.obs = obs
         else:
-            obs = curr_env.get_obs()
-            # if 'multi_model' in configs.rollout_type and obs != 0:
-            #     obs = obs[0]
-            self.obs = obs
+            self.obs = curr_env.get_obs()
 
         if done:
             self.done = done
         else:
             self.done = curr_env.done()
+            if self.done:
+                print('done???')
 
         self.LB = curr_env.get_LB()[0, 0].item()
         self.UBs = list()
         self.value = -1
+
         self.route = route
         self.best_follow = best_follow
 
@@ -38,36 +39,37 @@ class Node():
             return float('inf')
 
     def update_value(self):
-        if self.done or configs.value_type == 'best' or not self.UBs:
+        if self.done:
+            self.value = self.LB
+        elif 'best' in configs.pruning_type and configs.beam_n == 1:
             self.value = self.UB
+        elif 'best' in configs.value_type:
+            self.value = self.UB
+        elif 'mean' in configs.value_type:
+            self.value = sum(self.UBs) / len(self.UBs)
+        elif 'beta' in configs.value_type:
+            self.value = get_quantile_beta(self.UBs)
+        elif 'norm' in configs.value_type:
+            self.value = get_quantile_norm(self.UBs)
+        elif 'quantile_w' in configs.value_type:
+            self.value = get_quantile_weighted(self.UBs)
+        elif 'quantile_LB2' in configs.value_type:
+            self.value = get_quantile_LB2(self.LB, self.UBs)
+        elif 'quantile_LB' in configs.value_type:
+            self.value = get_quantile_LB(self.LB, self.UBs)
+        elif 'chi2' in configs.value_type:
+            self.value = get_quantile_chi2(self.UBs)
+        elif 't' in configs.value_type:
+            self.value = get_quantile_t(self.UBs)
         else:
-            if 'best' in configs.pruning_type and configs.beam_n == 1:
-                self.value = 0
-            else:
-                if 'best' in configs.value_type:
-                    self.value = self.UB
-                elif 'mean' in configs.value_type:
-                    self.value = sum(self.UBs) / len(self.UBs)
-                elif 'beta' in configs.value_type:
-                    self.value = get_quantile_beta(self.UBs)
-                elif 'norm' in configs.value_type:
-                    self.value = get_quantile_norm(self.UBs)
-                elif 't' in configs.value_type:
-                    self.value = get_quantile_t(self.UBs)
-                elif 'chi2' in configs.value_type:
-                    self.value = get_quantile_chi2(self.UBs)
-                elif 'quantile_w' in configs.value_type:
-                    self.value = get_quantile_weighted(self.UBs)
-                elif 'quantile_LB' in configs.value_type:
-                    self.value = get_quantile_LB(self.LB, self.UBs)
-                else:
-                    raise NotImplementedError
+            raise NotImplementedError
 
 
 class AgentTS(AgentGNN):
     def __init__(self, model_i=0):
         super().__init__(model_i)
-        self.model_load()
+        if 'model' in configs.rollout_type:
+            self.model_load()
 
     # rollout ###################################################################################
     def rollout_rules(self, curr_envs, rules=[]):
@@ -76,21 +78,26 @@ class AgentTS(AgentGNN):
         return: cum_r, avg_run_t, avg_decision_t, decision_n, trajectory
         """
         agent_type = configs.agent_type
-        # action_type = configs.action_type
         configs.agent_type = 'rule'
-        # configs.action_type = 'buffer'
 
         env = JobShopEnv(pomo_n=len(rules), load_envs=curr_envs)
         obs, reward, done = env.get_obs(), None, env.done()
+        actions = list()
 
-        while not done:
+        depth = 0
+        while not done and depth < configs.rollout_depth:
             a = env.get_action_rule(obs, rules)
             obs, reward, done = env.step(a)
 
-        configs.agent_type = agent_type
-        # configs.action_type = action_type
+            actions.append(a)
+            depth += 1
 
-        return reward
+        configs.agent_type = agent_type
+
+        if not done:
+            reward = -env.get_LB()
+
+        return reward, actions
 
     def rollout_model_once(self, curr_envs, model=None):
         """
@@ -99,16 +106,25 @@ class AgentTS(AgentGNN):
         """
         if not model:
             model = self.model
+
         env = JobShopEnv(pomo_n=1, load_envs=curr_envs)
+        obs, reward, done = env.get_obs(), None, env.done()
+        actions = list()
 
         model.eval()
         with torch.no_grad():
-            obs, reward, done = env.get_obs(), None, env.done()
-            while not done:
+            depth = 0
+            while not done and depth < configs.rollout_depth:
                 a = self.get_action_model(obs, model=model)
                 obs, reward, done = env.step(a)
 
-        return reward
+                actions.append(torch.concat(a))
+                depth += 1
+
+        if not done:
+            reward = -env.get_LB()
+
+        return reward, actions
 
     def rollout_models(self, curr_envs, models):
         """
@@ -116,84 +132,99 @@ class AgentTS(AgentGNN):
         return: cum_r, avg_run_t, avg_decision_t, decision_n, trajectory
         """
         if not models:
-            return self.rollout_model_once(curr_envs)
+            raise NotImplementedError
+
         env = JobShopEnv(pomo_n=len(models), load_envs=curr_envs)
+        obs_list, reward, done = env.get_obs(), None, env.done()
+        actions = list()
 
         for model in models:
             model.eval()
 
         with torch.no_grad():
-            obs_list, reward, done = env.get_obs(), None, env.done()
-            while not done:
+            depth = 0
+            while not done and depth < configs.rollout_depth:
                 a_list = self.get_action_models(obs_list, models=models, env_n=len(curr_envs))
                 obs_list, reward, done = env.step(a_list)
 
-        return reward
+                actions.append(torch.concat(a_list))
+                depth += 1
+
+        if not done:
+            reward = -env.get_LB()
+
+        return reward, actions
 
     def initial_rollout(self, nodes, rules=None, models=None):
-        # current model ######
+        # model ######
         if 'multi_model' in configs.rollout_type:
-            cum_r = self.rollout_models([node.curr_env for node in nodes], models)
+            cum_r, actions = self.rollout_models([node.curr_env for node in nodes], models)
+            a_ = torch.concat(actions).reshape(-1, len(nodes), len(models)).transpose(0, 2)
             for i, node in enumerate(nodes):
+                j = cum_r[i, :].argmax(dim=0).item()
+                node.best_follow = a_[j, i]
                 node.UBs += [-r.item() for r in cum_r[i, :]]
 
         elif 'model' in configs.rollout_type:
-            cum_r = self.rollout_model_once([node.curr_env for node in nodes])
+            cum_r, actions = self.rollout_model_once([node.curr_env for node in nodes])
+            a_ = torch.concat(actions).reshape(-1, len(nodes))
             for i, node in enumerate(nodes):
                 node.UBs.append(-cum_r[i, 0].item())
+                node.best_follow = a_[:, i]
 
         # rules ######
         if 'rule' in configs.rollout_type and rules:
-            cum_r = self.rollout_rules([node.curr_env for node in nodes], rules=rules)
+            cum_r, actions = self.rollout_rules([node.curr_env for node in nodes], rules=rules)
+            a_ = torch.concat(actions).reshape(-1, len(nodes), len(rules)).transpose(0, 2)
             for i, node in enumerate(nodes):
+                j = cum_r[i, :].argmax(dim=0).item()
+                if node.UBs:
+                    if node.UB > -cum_r[i, j]:
+                        node.best_follow = a_[j, i]
+                else:
+                    node.best_follow = a_[j, i]
                 node.UBs += [-r.item() for r in cum_r[i, :]]
 
-        # update_value ######
-        for node in nodes:
-            node.update_value()
         return nodes
 
-    # run episode ###################################################################################
+    # tree ###################################################################################
     def expansion_leaf(self, leaf_nodes, UB):
         new_done_nodes = list()
         new_non_done_nodes = list()
+
         total_n = 0
         UB_update = False
-
         for node in leaf_nodes:
             if node.done:
                 new_done_nodes.append(node)
                 continue
 
             candidate_a = node.obs['op_mask'].x.nonzero(as_tuple=True)[0]  # all actions
-            # expansion with beam_n
             if 'all' not in configs.expansion_type:
-                candidate_a = configs.beam_n  # nodes with highest prob.
+                # candidate_a = configs.beam_n  # nodes with highest prob. # child_n
+                raise NotImplementedError
 
             # expansion #################################################
-
             for a in candidate_a:
-                a = node.obs['op_remain'][a]
+                a = node.obs['op_remain'][a].view(1).to('cpu')
                 env = JobShopEnv(pomo_n=1, load_envs=[node.curr_env])
-                _, reward, done = env.step([a.view(1).to('cpu')])
+                _, reward, done = env.step([a])
 
-                node_ = Node(env, obs=None, done=done, route=node.route + [a.item()],
-                             best_follow=node.best_follow)
+                node_ = Node(env, obs=None, done=done, route=node.route + [a])
 
                 if done:
-                    node_.update_value()
                     new_done_nodes.append(node_)
                     if node_.LB < UB:
                         UB = node_.LB
                         UB_update = True
                 else:
                     total_n += 1
-                    if 'bound' in configs.expansion_type and node_.LB > UB:  # bound
+                    if 'bound' in configs.expansion_type and node_.LB >= UB:  # bound
                         continue
                     new_non_done_nodes.append(node_)
 
-        if UB_update and 'bound' in configs.expansion_type:
-            new_non_done_nodes = [node for node in new_non_done_nodes if node.LB <= UB]
+        if UB_update and 'bound' in configs.expansion_type:  # bound
+            new_non_done_nodes = [node for node in new_non_done_nodes if node.LB < UB]
 
         if total_n:
             real_n = len(new_non_done_nodes)
@@ -203,118 +234,212 @@ class AgentTS(AgentGNN):
 
         return new_non_done_nodes, new_done_nodes, UB
 
-    def run_episode_beam(self, problem, rules=None, models=None) -> (float, float, float, float, list):
+    def get_best_nodes(self, nodes, UB):
+        pos = len(nodes)
+        for i, node in enumerate(nodes):
+            if node.UB > UB:
+                pos = i
+                break
+
+        return nodes[:pos], nodes[pos:]
+
+    def get_action_beam(self, env, existing_tree=None, problem=None,
+                        rules=None, models=None) -> (float, list, list, float, list):
         """
         perform for an env
         return: cum_r, avg_run_t, avg_decision_t, decision_n, trajectory
         """
-        s_t = time.time()
-
-        configs.total_extend_n = 0
-        configs.real_extend_n = 0
-        configs.bound_rates = list()
-
-        # initial environment #########################################################################
-        env = JobShopEnv([problem], pomo_n=1)
-        obs, reward, done = env.reset()
-        # if 'multi_model' in configs.rollout_type:
-        #     obs = obs[0]
-
-        node = Node(env, obs=obs, done=done)  # initial expansion
-        non_done_nodes = self.initial_rollout([node], rules, models)  # simulation
-        UB = non_done_nodes[0].UB
-
-        depth = 1
+        best_non_done_nodes = list()
+        best_done_nodes = list()
         remain_done_nodes = list()
-        new_non_done_nodes = list()
-        if non_done_nodes[0].done:
-            best_non_done_nodes = list()
-            best_done_nodes = [non_done_nodes[0]]
-            done_nodes = [non_done_nodes[0]]
+        remain_non_done_nodes = list()
+
+        obs = env.get_obs()
+        done = env.done()
+
+        # initial #########################################################################
+        s_t = time.time()
+        if existing_tree:
+            non_done_nodes, done_nodes, best_node, UB = existing_tree
+            depth = configs.depth - 1
         else:
-            best_non_done_nodes = [non_done_nodes[0]]
-            best_done_nodes = list()
+            node = Node(env, obs=obs, done=done)  # initial expansion
+            if node.done:
+                return 0, [], [], node
+
+            non_done_nodes = self.initial_rollout([node], rules, models)  # simulation
+            UB = non_done_nodes[0].UB
+            best_node = non_done_nodes[0]
             done_nodes = list()
+            depth = 0
 
         # loop ########################################################################################
-        while non_done_nodes:
+        while non_done_nodes and depth < configs.depth:
             depth += 1
-            if depth > configs.depth:
-                break
-            # print(depth, '------------------------------')
 
-            # bounded expansion #########################
-            new_non_done_nodes, new_done_nodes, UB = self.expansion_leaf(non_done_nodes, UB)
+            # bounded expansion ###########################################
+            non_done_nodes, new_done_nodes, UB_ = self.expansion_leaf(non_done_nodes, UB)
 
             if new_done_nodes:
                 done_nodes += new_done_nodes
                 done_nodes.sort(key=lambda x: x.UB)
-                done_nodes = done_nodes[:configs.beam_n]
+                done_nodes = done_nodes[:configs.beam_n]  # too many -> cut
+                if UB_ < UB:
+                    UB = UB_
+                    best_node = done_nodes[0]
 
-            if not new_non_done_nodes:  # no more expansion -> break
+            if not non_done_nodes:  # no more expansion -> break
                 break
 
-            # simulation ################################
-            new_non_done_nodes = self.initial_rollout(new_non_done_nodes, rules, models)
+            # simulation ##################################################
+            non_done_nodes = self.initial_rollout(non_done_nodes, rules, models)
 
-            new_non_done_nodes.sort(key=lambda x: x.UB)
-            if new_non_done_nodes[0].UB < UB:
-                UB = new_non_done_nodes[0].UB
+            non_done_nodes.sort(key=lambda x: x.UB)
+            UB_ = non_done_nodes[0].UB
+            if UB_ < UB:
+                UB = UB_
+                best_node = non_done_nodes[0]
 
-            # separation  ##################################
-            best_done_nodes.clear()
-            best_non_done_nodes.clear()
+            # separation  #################################################
             remain_done_nodes.clear()
+            remain_non_done_nodes.clear()
 
             if 'with_best' in configs.pruning_type:
-                if 'terminal' in configs.pruning_type:
-                    pos = len(done_nodes)
-                    for i, node in enumerate(done_nodes):
-                        if node.UB > UB:
-                            pos = i
-                            break
-                    best_done_nodes = done_nodes[:pos]
-                    remain_done_nodes = done_nodes[pos:]
+                best_non_done_nodes.clear()
+                best_done_nodes.clear()
 
-                pos = len(new_non_done_nodes)
-                for i, node in enumerate(new_non_done_nodes):
-                    if node.UB > UB:
-                        pos = i
-                        break
-                best_non_done_nodes = new_non_done_nodes[:pos]
-                remain_non_done_nodes = new_non_done_nodes[pos:]
+                if 'terminal' in configs.pruning_type:
+                    best_done_nodes, remain_done_nodes = self.get_best_nodes(done_nodes, UB)
+                best_non_done_nodes, remain_non_done_nodes = self.get_best_nodes(non_done_nodes, UB)
 
             else:
                 if 'terminal' in configs.pruning_type:
                     remain_done_nodes = done_nodes
-                remain_non_done_nodes = new_non_done_nodes
+                remain_non_done_nodes = non_done_nodes
 
-            # pruning  ##################################
-            if configs.beam_n <= len(best_done_nodes) + len(best_non_done_nodes):  # 'with_best' in configs.pruning_type
+            # pruning  ####################################################
+            if configs.beam_n <= len(best_done_nodes) + len(best_non_done_nodes):  # 'with_best'
                 if not best_non_done_nodes:  # configs.beam_n <= len(best_done_nodes)
                     break
                 non_done_nodes = best_non_done_nodes[:configs.beam_n]
+
+            elif configs.beam_n >= len(best_done_nodes) + len(best_non_done_nodes) + \
+                    len(remain_done_nodes) + len(remain_non_done_nodes):
+                non_done_nodes = best_non_done_nodes + remain_non_done_nodes
+
             else:
                 non_done_nodes = best_non_done_nodes
 
                 remain_nodes = remain_done_nodes + remain_non_done_nodes
+                for node in remain_nodes:
+                    node.update_value()
                 remain_nodes.sort(key=lambda x: (x.value, x.done))  # priorities non_done nodes
+
                 for node in remain_nodes[:configs.beam_n - len(best_non_done_nodes)]:
                     if not node.done:
                         non_done_nodes.append(node)
 
         run_t = round(time.time() - s_t, 4)
-        # env.show_gantt_plotly(0, 0)
 
-        all_nodes = done_nodes + new_non_done_nodes
-        if not all_nodes:
-            all_nodes = best_non_done_nodes
-        all_nodes.sort(key=lambda x: (x.value, -x.done))  # priorities done nodes
+        return run_t, non_done_nodes, done_nodes, best_node
 
-        best_node = all_nodes[0]
+    def run_episode_with_beam(self, problem=None, rules=None, models=None) -> (float, float, float, float, list):
+        """
+        perform for an env
+        return: cum_r, avg_run_t, avg_decision_t, decision_n, trajectory
+        """
+        # initial environment #########################################################################
+        env = JobShopEnv([problem], pomo_n=1)
+        obs, reward, done = env.reset()
 
-        return best_node.UB, run_t, configs.total_extend_n, configs.real_extend_n, configs.bound_rates, \
-            best_node.curr_env.decision_n[0, 0].item()
+        with torch.no_grad():
+            configs.total_extend_n = 0
+            configs.real_extend_n = 0
+            configs.bound_rates = list()
+
+            run_ts = list()
+
+            start = True
+            while not done:
+                if start:
+                    run_t, non_done_nodes, done_nodes, best_node = self.get_action_beam(env, rules=rules, models=models)
+                    start = False
+                else:
+                    run_t, non_done_nodes, done_nodes, best_node = self.get_action_beam(
+                        env, existing_tree=(non_done_nodes, done_nodes, best_node, UB), rules=rules, models=models)
+                if best_node.route:
+                    a = best_node.route.pop(0).view(1, -1)
+                else:
+                    a = best_node.best_follow[0].view(1, -1)
+                    best_node.best_follow = best_node.best_follow[1:]
+                UB = best_node.UB
+                run_ts.append(run_t)
+
+                # route, best_follow update ############################
+                del_list = list()
+                for i, node in enumerate(done_nodes):
+                    if node == best_node:
+                        continue
+                    if node.route:
+                        if a.item() != node.route.pop(0).item():
+                            del_list.append(i)
+                    else:
+                        if a.item() != node.best_follow[0].item():
+                            del_list.append(i)
+                        node.best_follow = node.best_follow[1:]
+                for i in reversed(del_list):
+                    del done_nodes[i]
+
+                del_list = list()
+                for i, node in enumerate(non_done_nodes):
+                    if node == best_node:
+                        continue
+                    if node.route:
+                        if a.item() != node.route.pop(0).item():
+                            del_list.append(i)
+                    else:
+                        if a.item() != node.best_follow[0].item():
+                            del_list.append(i)
+                        node.best_follow = node.best_follow[1:]
+                for i in reversed(del_list):
+                    del non_done_nodes[i]
+
+                obs, reward, done = env.step([a])
+
+        return -reward.item(), sum(run_ts), len(run_ts), \
+               configs.total_extend_n, configs.real_extend_n, configs.bound_rates
+
+    def run_episode_with_beam2(self, problem=None, rules=None, models=None) -> (float, float, float, float, list):
+        """
+        perform for an env
+        return: cum_r, avg_run_t, avg_decision_t, decision_n, trajectory
+        """
+        # initial environment #########################################################################
+        env = JobShopEnv([problem], pomo_n=1)
+        obs, reward, done = env.reset()
+
+        with torch.no_grad():
+            configs.total_extend_n = 0
+            configs.real_extend_n = 0
+            configs.bound_rates = list()
+
+            run_ts = list()
+
+            while not done:
+                run_t, non_done_nodes, done_nodes, best_node = self.get_action_beam(env, rules=rules, models=models)
+
+                if best_node.route:
+                    a = best_node.route.pop(0).view(1, -1)
+                else:
+                    a = best_node.best_follow[0].view(1, -1)
+                    best_node.best_follow = best_node.best_follow[1:]
+
+                run_ts.append(run_t)
+
+                obs, reward, done = env.step([a])
+
+        return -reward.item(), sum(run_ts), len(run_ts), \
+               configs.total_extend_n, configs.real_extend_n, configs.bound_rates
 
     def perform_beam_benchmarks(self, benchmarks, save_path='') -> None:
         """
@@ -326,6 +451,7 @@ class AgentTS(AgentGNN):
 
         rules = get_rules(configs.rollout_n)
         models = None
+
         if 'multi_model' in configs.rollout_type:
             model_i_list = get_model_i_list(configs.rollout_n)
             models = self.models_load(model_i_list)
@@ -337,8 +463,13 @@ class AgentTS(AgentGNN):
             print(benchmark, job_n, mc_n, len(instances))
 
             for i in tqdm(instances):
-                reward, run_t, total_n, real_n, bound_rates, decision_n = self.run_episode_beam((
-                    benchmark, job_n, mc_n, i), rules=rules, models=models)
+                if configs.rollout_depth < 1e6:
+                    UB, run_t, decision_n, total_n, real_n, bound_rates = self.run_episode_with_beam2((
+                        benchmark, job_n, mc_n, i), rules=rules, models=models)
+                else:
+                    UB, run_t, decision_n, total_n, real_n, bound_rates = self.run_episode_with_beam((
+                        benchmark, job_n, mc_n, i), rules=rules, models=models)
+
                 with open(save_path, 'a', newline='') as f:
                     wr = csv.writer(f)
                     rate, mean_bound_rate = 0, 0
@@ -348,30 +479,93 @@ class AgentTS(AgentGNN):
                         mean_bound_rate = round(sum(bound_rates) / len(bound_rates), 3)
                     wr.writerow([benchmark, job_n, mc_n, i, 'beam', configs.action_type,
                                  configs.beam_n, configs.expansion_type, configs.value_type, configs.pruning_type,
-                                 configs.q_level, configs.rollout_n, configs.rollout_type, configs.depth,
-                                 reward, run_t, total_n, real_n, rate, mean_bound_rate,
+                                 configs.q_level, configs.rollout_n, configs.rollout_type,
+                                 configs.depth, configs.rollout_depth,
+                                 UB, run_t, total_n, real_n, rate, mean_bound_rate,
+                                 decision_n, round(run_t / decision_n, 4)])
+
+    def run_episode_with_TS(self, problem=None, rules=None, models=None) -> (float, float, float, float, list):
+        """
+        perform for an env
+        return: cum_r, avg_run_t, avg_decision_t, decision_n, trajectory
+        """
+        # initial environment #########################################################################
+        env = JobShopEnv([problem], pomo_n=1)
+        _, _, _ = env.reset()
+
+        with torch.no_grad():
+            configs.total_extend_n = 0
+            configs.real_extend_n = 0
+            configs.bound_rates = list()
+
+            run_t, non_done_nodes, done_nodes, best_node = self.get_action_beam(env, rules=rules, models=models)
+            UB = best_node.UB
+
+        return UB, run_t, best_node.curr_env.decision_n[0, 0].item(), \
+               configs.total_extend_n, configs.real_extend_n, configs.bound_rates
+
+    def perform_TS_benchmarks(self, benchmarks, save_path='') -> None:
+        """
+        perform for envs
+        """
+        import csv
+        from tqdm import tqdm
+        from utils import get_model_i_list, get_rules
+
+        rules = get_rules(configs.rollout_n)
+        models = None
+
+        if 'multi_model' in configs.rollout_type:
+            model_i_list = get_model_i_list(configs.rollout_n)
+            models = self.models_load(model_i_list)
+        elif 'model' in configs.rollout_type:
+            self.model_load()
+            self.model.to(configs.device)
+
+        for (benchmark, job_n, mc_n, instances) in benchmarks:
+            print(benchmark, job_n, mc_n, len(instances))
+
+            for i in tqdm(instances):
+                UB, run_t, decision_n, total_n, real_n, bound_rates = self.run_episode_with_TS((
+                    benchmark, job_n, mc_n, i), rules=rules, models=models)
+
+                with open(save_path, 'a', newline='') as f:
+                    wr = csv.writer(f)
+                    rate, mean_bound_rate = 0, 0
+                    if total_n:
+                        rate = 1 - round(real_n / total_n, 3)
+                    if bound_rates:
+                        mean_bound_rate = round(sum(bound_rates) / len(bound_rates), 3)
+                    wr.writerow([benchmark, job_n, mc_n, i, 'beam', configs.action_type,
+                                 configs.beam_n, configs.expansion_type, configs.value_type, configs.pruning_type,
+                                 configs.q_level, configs.rollout_n, configs.rollout_type,
+                                 configs.depth, configs.rollout_depth,
+                                 UB, run_t, total_n, real_n, rate, mean_bound_rate,
                                  decision_n, round(run_t / decision_n, 4)])
 
 
 if __name__ == '__main__':
     from utils import TA_small
 
-    save_path = f'./../result/model_beam0.csv'
+    save_path = f'./../result/model_beam_test.csv'
     configs.expansion_type = 'bound_all'
 
-    for configs.rollout_n in [3, 5]:
-        for configs.value_type in ['best']:  # quantile_w, best, mean, norm, beta, t, chi2
-            if configs.rollout_n == 1 and configs.value_type != 'best':
-                continue
+    for configs.depth in [3]:
 
-            for configs.beam_n in [1, 3, 5]:  # 5
-                if 'with_best' in configs.pruning_type and configs.beam_n == 1 and configs.value_type != 'best':
+        for configs.rollout_n in [3]:
+            for configs.value_type in ['best']:  # quantile_LB, best, mean, norm, beta, t, chi2
+                if configs.rollout_n == 1 and configs.value_type != 'best':
                     continue
 
-                for configs.rollout_type in ['multi_model']:  # model_rule, rule, multi_model
-                    if 'multi_model' in configs.rollout_type and configs.rollout_n == 1:
+                for configs.beam_n in [3]:  # 5
+                    if 'with_best' in configs.pruning_type and configs.beam_n == 1 and configs.value_type != 'best':
                         continue
 
-                    agent = AgentTS()
-                    agent.perform_beam_benchmarks(TA_small, save_path=save_path)
+                    for configs.rollout_type in ['model_rule']:  # model_rule, rule, multi_model
+                        if 'multi_model' in configs.rollout_type and configs.rollout_n == 1:
+                            continue
 
+                        agent = AgentTS()
+                        # agent.perform_TS_benchmarks([['HUN', 6, 4, list(range(40, 50))]], save_path=save_path)
+                        agent.perform_beam_benchmarks([['HUN', 6, 6, list(range(40, 50))]], save_path=save_path)
+                        # agent.perform_beam_benchmarks(TA_small, save_path=save_path)

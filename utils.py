@@ -73,28 +73,45 @@ def get_load_result_data(test_csv_file_name='./basic/bench_ours.csv') -> pd.Data
     # our data #####################################################################
     result_ours = pd.read_csv("./basic/bench_ours.csv")
     result_ours.columns = ['benchmark', 'job_n', 'mc_n', 'instance_i', 'agent_type', 'action_type', 'state_type',
-                           'method', 'makespan', 'time', 'mean_decision_t', 'decision_n']
+                           'method', 'makespan']  # , 'time', 'mean_decision_t', 'decision_n'
     result_ours['problem'] = result_ours['benchmark'] + ' ' + result_ours['job_n'].astype('string') + 'x' \
                              + result_ours['mc_n'].astype('string')
-    result_ours = result_ours.drop(['benchmark', 'job_n', 'mc_n', 'agent_type', 'action_type', 'state_type',
-                                    'time', 'mean_decision_t', 'decision_n'], axis=1)
+    result_ours = result_ours.drop(['benchmark', 'job_n', 'mc_n', 'agent_type', 'action_type', 'state_type'], axis=1)
+    result_ours['method'] = 'Lee'
+    # result_ours = pd.read_csv("./basic/bench_ours.csv")
+    # result_ours.columns = ['benchmark', 'job_n', 'mc_n', 'instance_i', 'type', 'action_type', 'beam_n',
+    #                        'expansion', 'value', 'pruning', 'quantile', 'rollout_n', 'rollout', 'max_d', 'rollout_d',
+    #                        'makespan', 'time', 'total_n', 'real_n', 'total_bound_rate',
+    #                        'mean_bound_rate', 'decision_n', 'unit']
+    # result_ours['problem'] = result_ours['benchmark'] + ' ' + result_ours['job_n'].astype('string') + 'x' \
+    #                          + result_ours['mc_n'].astype('string')
+    # result_ours = result_ours.drop(['benchmark', 'job_n', 'mc_n', 'agent_type', 'action_type', 'state_type',
+    #                                 'time', 'mean_decision_t', 'decision_n'], axis=1)
+
+    # our data #####################################################################
+    result_TS = pd.read_csv("./basic/bench_TS.csv")
+    result_TS.columns = ['benchmark', 'job_n', 'mc_n', 'instance_i', 'agent_type', 'action_type', 'state_type',
+                         'method', 'makespan', 'time']  # , 'time', 'mean_decision_t', 'decision_n'
+    result_TS['problem'] = result_TS['benchmark'] + ' ' + result_TS['job_n'].astype('string') + 'x' \
+                             + result_TS['mc_n'].astype('string')
+    result_TS = result_TS.drop(['benchmark', 'job_n', 'mc_n', 'agent_type', 'action_type', 'state_type'], axis=1)
+    result_TS['method'] = 'Ours_model'
 
     # rule data #####################################################################
     result_rule = pd.read_csv("./basic/bench_rule.csv")
-    result_rule.columns = ['benchmark', 'job_n', 'mc_n', 'instance_i', 'agent_type', 'action_type', 'state_type',
+    result_rule.columns = ['benchmark', 'job_n', 'mc_n', 'instance_i', 'agent_type', 'action_type',
                            'method', 'makespan', 'time']
     result_rule['problem'] = result_rule['benchmark'] + ' ' + result_rule['job_n'].astype('string') + 'x' \
                              + result_rule['mc_n'].astype('string')
-    result_rule = result_rule[result_rule['action_type'] == 'single_mc_buffer']
-    result_rule = result_rule.drop(['benchmark', 'job_n', 'mc_n', 'agent_type', 'action_type', 'state_type',
-                                    'time'], axis=1)
+    result_rule = result_rule[result_rule['action_type'] == 'buffer']
+    result_rule = result_rule.drop(['benchmark', 'job_n', 'mc_n', 'agent_type', 'action_type', 'time'], axis=1)
 
     # result + opt ##################################################################
     result_opt2 = result_opt.drop(['benchmark', 'job_n', 'mc_n', 'UB', 'name'], axis=1)
     result_opt2['makespan'] = result_opt['UB']
     result_opt2['method'] = 'OPT'
 
-    result_data = pd.concat([result_ours, result_ref, result_rule, result_cp, result_opt2])
+    result_data = pd.concat([result_ours, result_TS, result_ref, result_rule, result_cp, result_opt2])
     # result_data = pd.concat([result_ref, result_rule,  result_opt2, result_ours])
     merge_data = pd.merge(result_data, result_opt, on=['problem', 'instance_i'], how="left")
 
@@ -222,6 +239,15 @@ def get_env(problem_set: list, pomo_n: int=1):
     return JobShopEnv(env_list, pomo_n=pomo_n)
 
 
+def get_envs(problem_set: list, pomo_n: int=1):
+    from environment.env import JobShopEnv
+
+    env_list = list()
+    for benchmark, job_n, mc_n, instances in problem_set:
+        for i in instances:
+            env_list.append(JobShopEnv([(benchmark, job_n, mc_n, i)], pomo_n=pomo_n))
+
+    return env_list
 
 
 # total 242 instances ####################################################################################
@@ -281,6 +307,7 @@ rules_1 = ['LTT']
 
 rules_4 = ['LTT', 'MOR', 'FDD/MWKR', 'SPT']
 rules_2 = ['LTT', 'MOR']
+
 
 def get_rules(rollout_n):
     if configs.rollout_type == 'model_rule':
@@ -346,7 +373,7 @@ def get_quantile_weighted(v_list: list):
     for i, w in enumerate(tau):
         v += (w * v_list[i])
 
-    return v
+    return round(v, 4)
 
 
 from math import exp
@@ -361,7 +388,19 @@ def get_quantile_LB(LB, v_list: list):
     for i, w in enumerate(tau):
         v += (w * (LB + v_list[i]) / 2)
 
-    return v
+    return round(v, 4)
+
+
+def get_quantile_LB2(LB, v_list: list):
+    N = len(v_list)
+    v_list.sort(reverse=True)
+    tau = [(2*i+1)/2/N for i in range(N)]
+    tau = [round(tau_/sum(tau), 3) for tau_ in tau]
+    v = 0
+    for i, w in enumerate(tau):
+        v += (w * (LB + v_list[i]) / 2)
+
+    return round(v, 4)
 
 
 from scipy.stats import beta, norm, gamma, t, chi2
@@ -414,6 +453,58 @@ def quantile_test(v_list):
     print('chi2', get_quantile_chi2(v_list))
 
     print('weighted', get_quantile_weighted(v_list))
+
+
+#################################################################
+def get_RL_x_dim():
+    if configs.RL_state == 'pos':
+        return configs.rollout_n
+    elif configs.RL_state == 'sort':
+        return 2 * configs.rollout_n - 1
+    elif configs.RL_state == 'pos_sort':
+        return 3 * configs.rollout_n - 1
+    else:
+        raise NotImplementedError
+
+
+def get_new_envs(problem_info: list) -> list:
+    envs = list()
+    for job_n, mc_n, problem_n in problem_info:
+        envs += get_new_env_list(job_n, mc_n, problem_n)
+
+    return envs
+
+
+def get_new_env_list(job_n: int, mc_n: int, instance_n: int, pomo_n: int=1):
+    from benchmark.instance_gen import gen_instance
+    from environment.env import JobShopEnv
+    import random as rd
+
+    data_set = [[[1, 30], 0, False], [[1, 100], 0, False],
+                [[21, 30], 0, False], [[1, 30], 0.3, False],
+                [[1, 30], 0, True]]
+
+    (prt_range, mc_skip_ratio, separate_TF) = rd.choice(data_set)
+    benchmark = 'sample'
+
+    problem = f'{benchmark}{job_n}x{mc_n}'
+    folder_path = f'./../benchmark'
+    if not os.path.isdir(folder_path):
+        folder_path = f'./benchmark'
+
+    folder_path = f'{folder_path}/{benchmark}/{problem}'
+    if not os.path.isdir(folder_path):
+        os.makedirs(folder_path)
+
+    for instance_i in range(instance_n):
+        file_path = f'{folder_path}/instance_{instance_i}'
+        gen_instance(benchmark, job_n, mc_n, instance_i, prt_range, mc_skip_ratio, separate_TF, file_path)
+
+    envs = list()
+    for instance_i in range(instance_n):
+        envs.append(JobShopEnv([(benchmark, job_n, mc_n, instance_i)], pomo_n=pomo_n))
+
+    return envs
 
 
 if __name__ == "__main__":

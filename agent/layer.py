@@ -1,7 +1,7 @@
 import torch
 from params import configs
 import torch.nn as nn
-import torch.nn.functional as F
+from torch.nn.functional import softmax
 
 
 # layer ###################################################################
@@ -164,7 +164,7 @@ class Node_attn(nn.Module):
         h = self.f_init(x_from)
 
         w = torch.stack([A(h) for A in self.As], dim=0)
-        w = F.softmax(w, dim=1)
+        w = softmax(w, dim=1)
         h_ws = w * h
         h_ = torch.cat([aggr(h_w, edge_index, x_to) for h_w in h_ws], dim=1)
 

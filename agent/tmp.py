@@ -1,22 +1,24 @@
-from utils import get_rules, TA_small
+from utils import TA_small
 from params import configs
 from agent_TS import AgentTS
 
 
-configs.expansion_type = 'all'
-# configs.pruning_type = 'with_best'
-# configs.action_type = 'conflict'
+save_path = f'./../result/model_beam_0.csv'
+configs.expansion_type = 'bound_all'
 
-for configs.rollout_n in [1]:
-    for configs.beam_n in [1]:  # 5
-        for configs.value_type in ['best']:
-            if configs.rollout_n == 1 and configs.value_type != 'best':
+for configs.rollout_n in [5]:
+    for configs.value_type in ['mean']:  # quantile_LB, best, mean, norm, beta, t, chi2
+        if configs.rollout_n == 1 and configs.value_type != 'best':
+            continue
+
+        for configs.beam_n in [5]:  # 5
+            if 'with_best' in configs.pruning_type and configs.beam_n == 1 and configs.value_type != 'best':
                 continue
 
-            for configs.rollout_type in ['model']:  # model_rule
-                rules = get_rules(configs.rollout_n)
+            for configs.rollout_type in ['model_rule']:  # model_rule, rule, multi_model
+                if 'multi_model' in configs.rollout_type and configs.rollout_n == 1:
+                    continue
 
                 agent = AgentTS()
-
-                save_path = f'./../result/model_beam6.csv'
-                agent.perform_beam_benchmarks([['TA', 15, 15, [6]]], save_path=save_path, rules=rules)
+                # agent.perform_TS_benchmarks(TA_small, save_path=save_path)
+                agent.perform_beam_benchmarks(TA_small, save_path=save_path)

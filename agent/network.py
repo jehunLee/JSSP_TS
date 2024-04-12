@@ -150,7 +150,7 @@ class GNN(torch.nn.Module):
         if 'policy' in self.agent_type:
             if configs.softmax_tau != 1:
                 z /= configs.softmax_tau
-            return F.softmax(z, dim=-2)
+            return softmax(z, dim=-2)
         else:
             return z
 

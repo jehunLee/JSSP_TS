@@ -27,7 +27,7 @@ parser.add_argument('--batch_size', type=int, default=1024, help='learning batch
 parser.add_argument('--training_len', type=int, default=500, help='number of instances of learning target with a problem size')
 
 parser.add_argument('--L2_norm_w', type=float, default=1e-5, help='regularization factor, L2 norm')
-parser.add_argument('--lr', type=float, default=1e-3, help='learning rate')
+# parser.add_argument('--lr', type=float, default=1e-3, help='learning rate')
 parser.add_argument('--scheduler_type', type=str, default='step', help='adaptive function of learning rate')
 parser.add_argument('--optimizer_type', type=str, default='adam', help='update function of gradient descent')
 parser.add_argument('--max_grad_norm', type=float, default=1.0, help='maximum normalization value of gradient')
@@ -61,9 +61,15 @@ parser.add_argument('--q_level', type=float, default=0.01, help='')
 parser.add_argument('--value_type', type=str, default='quantile_weighted', help='best, mean, quantile_beta, quantile_norm, quantile_weighted')
 
 parser.add_argument('--beam_n', type=int, default=3, help='beam width')
-parser.add_argument('--depth', type=int, default=10000000, help='maximum depth')
-
+parser.add_argument('--depth', type=int, default=1e6, help='maximum depth')
+parser.add_argument('--rollout_depth', type=int, default=1e6, help='maximum rollout depth')
 
 #####################################################
+parser.add_argument('--RL_max_ep_n', type=int, default=500, help='number of learning epochs')
+parser.add_argument('--train_env_n', type=int, default=20, help='number of learning epochs')
+parser.add_argument('--gamma', type=float, default=0.9, help='number of learning epochs')
+parser.add_argument('--lr', type=float, default=1e-2, help='learning rate')
+
+
 configs = parser.parse_args()
 
