@@ -45,22 +45,22 @@ class JobShopEnv:
         self.max_mc_n = envs[0].max_mc_n
 
         self.op_n = envs[0].op_n
-        self.op_map = envs[0].op_map.expand(self.env_n, -1, -1)
+        self.op_map = envs[0].op_map
 
         self.init_job_durations = envs[0].init_job_durations
         self.M = envs[0].M
 
         # static #####################################################################
         self.job_durations = envs[0].job_durations.repeat(self.env_n, self.pomo_n, 1, 1)
-        self.job_mcs = envs[0].job_mcs.expand(self.env_n, self.pomo_n, -1, -1)
-        self.op_mcs = envs[0].op_mcs.expand(self.env_n, self.pomo_n, -1)
+        self.job_mcs = envs[0].job_mcs.repeat(self.env_n, self.pomo_n, 1, 1)
+        self.op_mcs = envs[0].op_mcs.repeat(self.env_n, self.pomo_n, 1)
 
-        self.job_tails = envs[0].job_tails.expand(self.env_n, self.pomo_n, -1, -1)
-        self.job_tail_ns = envs[0].job_tail_ns.expand(self.env_n, self.pomo_n, -1, -1)
-        self.job_flow_due_date = envs[0].job_flow_due_date.expand(self.env_n, self.pomo_n, -1, -1)
+        self.job_tails = envs[0].job_tails.repeat(self.env_n, self.pomo_n, 1, 1)
+        self.job_tail_ns = envs[0].job_tail_ns.repeat(self.env_n, self.pomo_n, 1, 1)
+        self.job_flow_due_date = envs[0].job_flow_due_date.repeat(self.env_n, self.pomo_n, 1, 1)
 
-        self.job_step_n = envs[0].job_step_n.expand(self.env_n, self.pomo_n, -1)
-        self.init_job_step_n = envs[0].init_job_step_n.expand(self.env_n, -1, -1)
+        self.job_step_n = envs[0].job_step_n.repeat(self.env_n, self.pomo_n, 1)
+        self.init_job_step_n = envs[0].init_job_step_n.repeat(self.env_n, 1, 1)
 
         # dynamic #####################################################################
         self.job_last_step = torch.cat([env.job_last_step for env in envs], dim=0).repeat(
@@ -75,7 +75,8 @@ class JobShopEnv:
 
         self.job_done_t = torch.cat([env.job_done_t for env in envs], dim=0).repeat(
             1, self.pomo_n, 1, 1)
-        self.job_arrival_t_ = envs[0].job_arrival_t_.expand(self.env_n, self.pomo_n, -1)
+        self.job_arrival_t_ = torch.cat([env.job_arrival_t_ for env in envs], dim=0).repeat(
+            1, self.pomo_n, 1, 1)
 
         self.mc_last_job = torch.cat([env.mc_last_job for env in envs], dim=0).repeat(
             1, self.pomo_n, 1)
@@ -276,7 +277,7 @@ class JobShopEnv:
         self.job_ready_t_mc_gap = torch.zeros(self.env_n, self.pomo_n, self.max_job_n+1, self.max_mc_n+1,
                                               dtype=torch.long)
         self.job_done_t = self.init_job_done.unsqueeze(dim=1).repeat(1, self.pomo_n, 1, 1)
-        self.job_arrival_t_ = self.init_job_arrival.unsqueeze(dim=1).expand(-1, self.pomo_n, -1)
+        self.job_arrival_t_ = self.init_job_arrival.unsqueeze(dim=1).repeat(1, self.pomo_n, 1)
 
         self.mc_last_job = torch.full(size=(self.env_n, self.pomo_n, self.max_mc_n), fill_value=self.max_job_n)
         self.mc_last_job_step = torch.zeros(self.env_n, self.pomo_n, self.max_mc_n, dtype=torch.long)
@@ -303,14 +304,13 @@ class JobShopEnv:
 
     def step(self, a):
         if 'rule' in configs.agent_type:
-            a = self.get_assign_job(a)
             self.assign(a)
         elif self.pomo_n > 1:
             a = self.get_assign_job(torch.concat(a).to('cpu').view(
                 self.pomo_n, self.env_n).transpose(0, 1).contiguous())
             self.assign(a)
         else:
-            a = self.get_assign_job(torch.concat(a).to('cpu').view(self.env_n, -1))
+            a = self.get_assign_job(torch.concat(a).to('cpu').view(self.env_n, 1))
             self.assign(a)
 
         ##############################################################################
@@ -329,13 +329,6 @@ class JobShopEnv:
             reward = None
 
         return self.get_obs(), reward, done
-
-    def get_assign_job(self, selected_index):
-        assign_job = F.one_hot(selected_index, num_classes=self.op_n).view(
-            self.env_n, self.pomo_n, self.max_job_n, -1).max(dim=3)[0].argmax(dim=2)
-        assign_job = assign_job.view(self.env_n, self.pomo_n, 1).expand(-1, -1, self.max_mc_n)
-
-        return torch.where(self.target_mc == 1, assign_job, self.max_job_n)
 
     ########################################################################################################
     def assign(self, mc_job):  # assign for a machine
@@ -711,12 +704,13 @@ class JobShopEnv:
 
                 return total_data_list
 
-            else:  # self.pomo_n == 1
+            else:
                 data_list = list()
                 for i in range(self.env_n):
-                    # torch_geom ############################
-                    data = get_data(i, 0)
-                    data_list.append(data)
+                    for j in range(self.pomo_n):
+                        # torch_geom ############################
+                        data = get_data(i, j)
+                        data_list.append(data)
 
                 loader = DataLoader(data_list, len(data_list), shuffle=False)
 
@@ -734,9 +728,10 @@ class JobShopEnv:
         # makespan ##############
         max_done_t = self.job_done_t[self.ENV_IDX_J, self.POMO_IDX_J, self.JOB_IDX, self.job_step_n-1].max(dim=2)[0]
 
-        # mean_flow_t ##############
-        # mean_f_t = (self.job_done_t[self.ENV_IDX_J, self.POMO_IDX_J, self.JOB_IDX, self.job_step_n-1] -
-        #             self.job_arrival_t_)[:, :, :-1].sum(dim=2) / self.max_job_n
+        # total_complete_t ##############
+        done_t = (self.job_done_t[self.ENV_IDX_J, self.POMO_IDX_J, self.JOB_IDX, self.job_step_n-1] -
+                  self.job_arrival_t_)[:, :, :-1]
+        total_c_t = done_t.sum(dim=2)
 
         # mc LB ##############
         # mc_t = self.job_done_t[self.ENV_IDX_M, self.POMO_IDX_M, self.mc_last_job, self.mc_last_job_step]
@@ -804,7 +799,14 @@ class JobShopEnv:
         index_SPT = -features[self.ENV_IDX_O, self.POMO_IDX_O, self.OP_IDX, 0]
         index += index_SPT / self.M + index_FIFO / self.M / self.M
 
-        return index.argmax(dim=2)
+        return self.get_assign_job(index.argmax(dim=2))
+
+    def get_assign_job(self, selected_index):
+        assign_job = F.one_hot(selected_index, num_classes=self.op_n).view(
+            self.env_n, self.pomo_n, self.max_job_n, -1).max(dim=3)[0].argmax(dim=2)
+        assign_job = assign_job.view(self.env_n, self.pomo_n, 1).expand(-1, -1, self.max_mc_n)
+
+        return torch.where(self.target_mc == 1, assign_job, self.max_job_n)
 
     #####################################################################################################
     def run_episode_rule(self, rules):
@@ -812,7 +814,6 @@ class JobShopEnv:
         while not done:
             a = self.get_action_rule(obs, rules)
             obs, reward, done = self.step(a)
-
         return reward, self.decision_n
 
     #####################################################################################################
@@ -821,7 +822,7 @@ class JobShopEnv:
         import plotly.express as px
         import os
 
-        first_list = [(0, 0, 0, 0, 0, 0, '')]
+        first_list = [(0, 0, 0, 0, 0, 0, "")]
         col_name = ['op_i', 'job_id', 'ith', 'resource', 'start_t', 'end_t', 'text']
         df = pd.DataFrame(first_list, columns=col_name)
 
@@ -831,11 +832,9 @@ class JobShopEnv:
         mcs = self.job_mcs[env_i, pomo_i, :, :]
 
         for i in range(self.max_job_n):
-            job_last_step = self.job_last_step[env_i, pomo_i, i]
-            # step_n = self.job_step_n[env_i, pomo_i, i]
-            if job_last_step:
-                for j in range(job_last_step):
-
+            step_n = self.job_step_n[env_i, pomo_i, i]
+            if step_n:
+                for j in range(step_n):
                     op_idx = self.max_job_n * i + j
                     mc_i = mcs[i, j].item()
 
@@ -860,15 +859,15 @@ class JobShopEnv:
         df = df[1:]
         df['delta'] = df['end_t'] - df['start_t']
 
-        fig = px.timeline(df, x_start='start_t', x_end='end_t', y='resource',
-                          color='job_id', text='text', opacity=0.6,
+        fig = px.timeline(df, x_start="start_t", x_end="end_t", y="resource",
+                          color="job_id", text="text", opacity=0.6,
                           color_continuous_scale='rainbow')  # https://plotly.com/python/colorscales/
 
-        fig.update_yaxes(autorange='reversed')
+        fig.update_yaxes(autorange="reversed")
         fig.layout.xaxis.type = 'linear'
         fig.data[0].x = df.delta.tolist()
 
-        fig.update_layout(plot_bgcolor='white',
+        fig.update_layout(plot_bgcolor="white",
                           title={
                               'text': title,
                               'y': 1,
@@ -891,7 +890,7 @@ class JobShopEnv:
 
 
 if __name__ == "__main__":
-    from utils import rules_5, all_benchmarks, REAL_D, FLOW, TA, small_benchmarks
+    from utils import rules_5, all_benchmarks, REAL_D, FLOW
     import csv, time
     # import cProfile
     #
@@ -924,9 +923,7 @@ if __name__ == "__main__":
     import os
     from tqdm import tqdm
 
-    # configs.action_type = 'buffer'
-    configs.action_type = 'conflict'
-
+    configs.action_type = 'buffer'
     configs.agent_type = 'rule'
     rules = rules_5
     # rules = ['LTT']
@@ -935,10 +932,9 @@ if __name__ == "__main__":
     save_folder = f'./../result/'
     if not os.path.exists(save_folder):
         os.makedirs(save_folder)
-    save_path = save_folder + f'bench_conflict_rule.csv'
+    save_path = save_folder + f'result_rule_real_d.csv'
 
-    for (benchmark, job_n, mc_n, instances) in [['TA', 50, 20, list(range(10))],
-                                                ['TA', 100, 20, list(range(10))]]:
+    for (benchmark, job_n, mc_n, instances) in REAL_D:
         print(benchmark, job_n, mc_n, instances)
         for i in tqdm(instances):
             envs_info = [(benchmark, job_n, mc_n, i)]
