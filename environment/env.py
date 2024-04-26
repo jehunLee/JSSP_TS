@@ -711,13 +711,12 @@ class JobShopEnv:
 
                 return total_data_list
 
-            else:
+            else:  # self.pomo_n == 1
                 data_list = list()
                 for i in range(self.env_n):
-                    for j in range(self.pomo_n):
-                        # torch_geom ############################
-                        data = get_data(i, j)
-                        data_list.append(data)
+                    # torch_geom ############################
+                    data = get_data(i, 0)
+                    data_list.append(data)
 
                 loader = DataLoader(data_list, len(data_list), shuffle=False)
 
@@ -892,7 +891,7 @@ class JobShopEnv:
 
 
 if __name__ == "__main__":
-    from utils import rules_5, all_benchmarks, REAL_D, FLOW
+    from utils import rules_5, all_benchmarks, REAL_D, FLOW, TA, small_benchmarks
     import csv, time
     # import cProfile
     #
@@ -925,7 +924,9 @@ if __name__ == "__main__":
     import os
     from tqdm import tqdm
 
-    configs.action_type = 'buffer'
+    # configs.action_type = 'buffer'
+    configs.action_type = 'conflict'
+
     configs.agent_type = 'rule'
     rules = rules_5
     # rules = ['LTT']
@@ -934,9 +935,10 @@ if __name__ == "__main__":
     save_folder = f'./../result/'
     if not os.path.exists(save_folder):
         os.makedirs(save_folder)
-    save_path = save_folder + f'result_rule_real_d.csv'
+    save_path = save_folder + f'bench_conflict_rule.csv'
 
-    for (benchmark, job_n, mc_n, instances) in REAL_D:
+    for (benchmark, job_n, mc_n, instances) in [['TA', 50, 20, list(range(10))],
+                                                ['TA', 100, 20, list(range(10))]]:
         print(benchmark, job_n, mc_n, instances)
         for i in tqdm(instances):
             envs_info = [(benchmark, job_n, mc_n, i)]

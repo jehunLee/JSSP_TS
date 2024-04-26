@@ -5,7 +5,54 @@ import pickle, torch, os, time
 
 from torch.distributions import Categorical
 from utils import get_x_dim
-from network import GNN, Hetero_GNN_type_aware_all_pred, Hetero_GNN_type_aware
+from network import GNN, Hetero_GNN_type_aware_all_pred, Hetero_GNN_type_aware  #, Parallel_run
+
+
+# from multiprocessing import Manager, Process
+# import torch.multiprocessing as mp
+
+# from torch_geometric.loader import DataLoader
+
+# from functools import partial
+
+
+# def get_action(j, obs, model, env_n, action_dict):
+#     if len(obs['op_mask'].x) == 0:
+#         action_dict[j] = [torch.tensor([0], dtype=torch.int64).to(configs.device) for _ in range(env_n)]
+#
+#     else:
+#         actions = list()
+#
+#         probs = model(obs)
+#         graph_index = obs['op'].batch
+#         for batch_i, prob in enumerate(probs):
+#             if not prob.size()[0]:
+#                 actions.append(torch.tensor([0], dtype=torch.int64).to(configs.device))
+#                 continue
+#
+#             a_tensor = torch.argmax(prob).view(-1)
+#             indices = torch.where(graph_index == batch_i)
+#             actions.append(obs['op_remain'][indices][a_tensor])
+#
+#         action_dict[j] = actions
+
+# def get_action(model, obs, env_n):
+#     action_list = list()
+#     if len(obs['op_mask'].x) == 0:
+#         for _ in range(env_n):
+#             action_list.append(torch.tensor([0], dtype=torch.int64).to(configs.device))
+#     else:
+#         probs = model(obs)
+#         graph_index = obs['op'].batch
+#         for batch_i, prob in enumerate(probs):
+#             if not prob.size()[0]:
+#                 action_list.append(torch.tensor([0], dtype=torch.int64).to(configs.device))
+#             else:
+#                 a_tensor = torch.argmax(prob).view(-1)
+#                 indices = torch.where(graph_index == batch_i)
+#                 action_list.append(obs['op_remain'][indices][a_tensor])
+#
+#     return action_list
 
 
 class AgentGNN():
@@ -54,6 +101,104 @@ class AgentGNN():
 
         return actions
 
+    # def get_action_models(self, obs_list, models, env_n=1):
+    #     models_ = [partial(get_action, model=model) for model in models]
+    #     parallel_run = Parallel_run(models_)
+    #
+    #     return parallel_run(obs_list, env_n)
+
+    # def get_action_models(self, obs_list, models, env_n=1):
+    #     """
+    #     get greedy action with the highest value
+    #     """
+    #     s_t = time.time()
+    #     pomo_n = len(obs_list)
+    #
+    #     ctx = mp.get_context('spawn')
+    #     # pool = ctx.Pool(pomo_n)
+    #     queue = ctx.Queue(pomo_n)
+    #     jobs = list()
+    #
+    #     for j, obs in enumerate([obs_list[0]]):
+    #         obs.to('cpu').share_memory_()
+    #         # obs.to('cuda')
+    #
+    #         p = ctx.Process(target=get_action, args=(queue, j, obs, models[j], env_n))
+    #         p.start()
+    #         jobs.append(p)
+    #
+    #     for p in jobs:
+    #         p.join()
+    #
+    #     # integrate ##############
+    #     actions = list()
+    #     queue.put('exit')
+    #
+    #     total = 0
+    #     while True:
+    #         if total == 0:
+    #             total += 1
+    #             continue
+    #         tmp = queue.get()
+    #         if tmp == 'exit':
+    #             break
+    #         else:
+    #             actions += tmp
+    #
+    #     print(time.time() - s_t)
+    #
+    #     return actions
+
+    # def get_action_models(self, obs_list, models, env_n=1):
+    #     """
+    #     get greedy action with the highest value
+    #     """
+    #     manager = mp.Manager()
+    #     action_dict = manager.dict()
+    #     jobs = list()
+    #     configs.obs_list = obs_list
+    #     for j, obs in enumerate(obs_list):
+    #         action_dict[j] = list()
+    #         p = mp.Process(target=get_action, args=(j, obs, models[j], env_n, action_dict))
+    #         jobs.append(p)
+    #         p.start()
+    #
+    #     for p in jobs:
+    #         p.join()
+    #
+    #     # integrate ##############
+    #     actions = list()
+    #     for j in range(len(obs_list)):
+    #         actions += action_dict[j]
+    #
+    #     return actions
+    #
+    # def get_action_models2(self, obs_list, models, env_n=1):
+    #     """
+    #     get greedy action with the highest value
+    #     """
+    #     s_t = time.time()
+    #     manager = Manager()
+    #     action_dict = manager.dict()
+    #     jobs = list()
+    #     for j, obs in enumerate([obs_list[0]]):
+    #         action_dict[j] = list()
+    #         p = Process(target=get_action, args=(j, obs, models[j], env_n, action_dict))
+    #         jobs.append(p)
+    #         p.start()
+    #
+    #     for p in jobs:
+    #         p.join()
+    #
+    #     # integrate ##############
+    #     actions = list()
+    #     for j in range(env_n):
+    #         actions += action_dict[j]
+    #
+    #     print(time.time() - s_t)
+    #
+    #     return actions
+
     def get_action_models(self, obs_list, models, env_n=1):
         """
         get greedy action with the highest value
@@ -61,8 +206,7 @@ class AgentGNN():
         actions = list()
         for j, obs in enumerate(obs_list):
             if len(obs['op_mask'].x) == 0:
-                for _ in range(env_n):
-                    actions.append(torch.tensor([0], dtype=torch.int64).to(configs.device))
+                actions += [torch.tensor([0], dtype=torch.int64).to(configs.device) for _ in range(env_n)]
                 continue
 
             probs = models[j](obs)
@@ -281,7 +425,6 @@ class AgentGNN():
         from tqdm import tqdm
         from environment.env import JobShopEnv
         from environment.dyn_env import JobShopDynEnv
-
 
         self.model_load()
         self.model.to(configs.device)

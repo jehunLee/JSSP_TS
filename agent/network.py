@@ -1,7 +1,7 @@
 from layer import *
 
 
-class GNN(torch.nn.Module):
+class GNN(nn.Module):
     def __init__(self, in_dim, out_dim, in_dim_rsc=1, agent_type='policy'):
         super().__init__()
         self.agent_type = agent_type
@@ -300,3 +300,49 @@ class Hetero_GNN_type_aware(GNN):
         else:
             return self.final_h(h)
 
+
+
+
+
+
+# class Parallel_run(nn.Module):
+#     def __init__(self, models):
+#         super().__init__()
+#         self.branches = nn.ModuleList(models)
+#
+#     def forward(self, obs_list, env_n):
+#         z_tuple = [model(obs_list[i]) for i, model in enumerate(self.branches)]
+#
+#         actions = list()
+#         for i, probs in enumerate(z_tuple):
+#             if len(obs_list[i]['op_mask'].x) == 0:
+#                 actions += [torch.tensor([0], dtype=torch.int64).to(configs.device) for _ in range(env_n)]
+#                 continue
+#
+#             graph_index = obs_list[i]['op'].batch
+#             for batch_i, prob in enumerate(probs):
+#                 if not prob.size()[0]:
+#                     actions.append(torch.tensor([0], dtype=torch.int64).to(configs.device))
+#                     continue
+#
+#                 a_tensor = torch.argmax(prob).view(-1)
+#                 indices = torch.where(graph_index == batch_i)
+#                 actions.append(obs_list[i]['op_remain'][indices][a_tensor])
+#
+#         return actions
+#
+#
+# class Parallel_run(nn.Module):
+#     def __init__(self, models_):
+#         super().__init__()
+#         # self.branches = nn.Parallel(*models)
+#         self.branches = nn.ModuleList(models_)
+#
+#     def forward(self, obs_list, env_n):
+#         actions_ = [model(obs_list[i], env_n) for i, model in enumerate(self.branches)]
+#
+#         actions = list()
+#         for actions__ in actions_:
+#             actions += actions__
+#
+#         return actions

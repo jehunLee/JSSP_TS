@@ -89,21 +89,22 @@ def get_load_result_data(test_csv_file_name='./basic/bench_ours.csv') -> pd.Data
     #                                 'time', 'mean_decision_t', 'decision_n'], axis=1)
 
     # our data #####################################################################
-    result_TS = pd.read_csv("./basic/bench_TS.csv")
-    result_TS.columns = ['benchmark', 'job_n', 'mc_n', 'instance_i', 'agent_type', 'action_type', 'state_type',
-                         'method', 'makespan', 'time']  # , 'time', 'mean_decision_t', 'decision_n'
-    result_TS['problem'] = result_TS['benchmark'] + ' ' + result_TS['job_n'].astype('string') + 'x' \
-                             + result_TS['mc_n'].astype('string')
-    result_TS = result_TS.drop(['benchmark', 'job_n', 'mc_n', 'agent_type', 'action_type', 'state_type'], axis=1)
-    result_TS['method'] = 'Ours_model'
+    # result_TS = pd.read_csv("./basic/bench_TS.csv")
+    # result_TS.columns = ['benchmark', 'job_n', 'mc_n', 'instance_i', 'agent_type', 'action_type', 'state_type',
+    #                      'method', 'makespan', 'time']  # , 'time', 'mean_decision_t', 'decision_n'
+    # result_TS['problem'] = result_TS['benchmark'] + ' ' + result_TS['job_n'].astype('string') + 'x' \
+    #                          + result_TS['mc_n'].astype('string')
+    # result_TS = result_TS.drop(['benchmark', 'job_n', 'mc_n', 'agent_type', 'action_type', 'state_type'], axis=1)
+    # result_TS['method'] = 'Ours_model'
 
     # rule data #####################################################################
-    result_rule = pd.read_csv("./basic/bench_rule.csv")
+    result_rule = pd.read_csv("./basic/bench_conflict_rule.csv")
     result_rule.columns = ['benchmark', 'job_n', 'mc_n', 'instance_i', 'agent_type', 'action_type',
                            'method', 'makespan', 'time']
     result_rule['problem'] = result_rule['benchmark'] + ' ' + result_rule['job_n'].astype('string') + 'x' \
                              + result_rule['mc_n'].astype('string')
-    result_rule = result_rule[result_rule['action_type'] == 'buffer']
+    # result_rule = result_rule[result_rule['action_type'] == 'buffer']
+    # result_rule = result_rule[result_rule['action_type'] == 'conflict']
     result_rule = result_rule.drop(['benchmark', 'job_n', 'mc_n', 'agent_type', 'action_type', 'time'], axis=1)
 
     # result + opt ##################################################################
@@ -111,7 +112,7 @@ def get_load_result_data(test_csv_file_name='./basic/bench_ours.csv') -> pd.Data
     result_opt2['makespan'] = result_opt['UB']
     result_opt2['method'] = 'OPT'
 
-    result_data = pd.concat([result_ours, result_TS, result_ref, result_rule, result_cp, result_opt2])
+    result_data = pd.concat([result_ours, result_ref, result_rule, result_cp, result_opt2])
     # result_data = pd.concat([result_ref, result_rule,  result_opt2, result_ours])
     merge_data = pd.merge(result_data, result_opt, on=['problem', 'instance_i'], how="left")
 
@@ -274,6 +275,16 @@ all_benchmarks = TA + LA + ABZ + FT + ORB + SWV + YN + DMU
 TA_small = [['TA', 15, 15, list(range(10))],
       ['TA', 20, 15, list(range(10))], ['TA', 20, 20, list(range(10))],
       ['TA', 30, 15, list(range(10))], ]  # < 500 operations
+
+
+# under 300 operations ##########
+small_benchmarks = [['TA', 15, 15, list(range(10))], ['TA', 20, 15, list(range(10))]] + LA + ABZ + FT + ORB + \
+                   [['SWV', 20, 10, list(range(5))], ['SWV', 20, 15, list(range(5))]] + \
+                   [['DMU', 20, 15, list(range(10))]]
+
+small_benchmarks = LA + [['TA', 15, 15, list(range(10))], ['TA', 20, 15, list(range(10))]] + ABZ + FT + ORB + \
+                   [['SWV', 20, 10, list(range(5))], ['SWV', 20, 15, list(range(5))]] + \
+                   [['DMU', 20, 15, list(range(10))]]
 
 # total 86 instances ####################################################################################
 TA_dyn = [['TA', 50, 15, list(range(10))], ['TA', 50, 20, list(range(10))], ['TA', 100, 20, list(range(10))]]  # 30

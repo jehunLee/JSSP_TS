@@ -6,6 +6,7 @@ parser = argparse.ArgumentParser(description='GNN_JSSP')
 # device
 parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                     help='computing device type: cpu or gpu')
+# parser.add_argument('--device', type=str, default='cpu')
 
 # environment
 parser.add_argument('--state_type', type=str, default='mc_gap_mc_load_prt_norm', help='state type: mc_gap_mc_load_prt_norm, mc_gap_mc_load, prt_norm')
