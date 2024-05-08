@@ -2,6 +2,8 @@ from params import configs
 import torch, time
 from agent_GNN import AgentGNN
 from environment.env import JobShopEnv
+from environment.dyn_env import JobShopDynEnv
+
 from utils import get_quantile_beta, get_quantile_norm, get_quantile_weighted, get_quantile_LB, \
     get_quantile_t, get_quantile_chi2, get_quantile_LB2
 
@@ -21,8 +23,12 @@ class Node():
             self.done = curr_env.done()
 
         self.LB = curr_env.get_LB()[0, 0].item()
+
         self.UBs = list()
         self.value = -1
+
+        self.prob = 1
+        self.greedy = False
 
         self.route = route
         self.best_follow = best_follow
@@ -37,7 +43,9 @@ class Node():
             return float('inf')
 
     def update_value(self):
-        if self.done:
+        if 'prob' in configs.rollout_type:
+            self.value = self.LB
+        elif self.done:
             self.value = self.LB
         elif 'best' in configs.pruning_type and configs.beam_n == 1:
             self.value = self.UB
@@ -66,8 +74,6 @@ class Node():
 class AgentTS(AgentGNN):
     def __init__(self, model_i=0):
         super().__init__(model_i)
-        if 'model' in configs.rollout_type:
-            self.model_load()
 
     # rollout ###################################################################################
     def rollout_rules(self, curr_envs, rules=[]):
@@ -83,7 +89,7 @@ class AgentTS(AgentGNN):
         actions = list()
 
         depth = 0
-        while not done:  # and depth < configs.rollout_depth:
+        while not done:
             a = env.get_action_rule(obs, rules)
             obs, reward, done = env.step(a)
 
@@ -91,9 +97,6 @@ class AgentTS(AgentGNN):
             depth += 1
 
         configs.agent_type = agent_type
-
-        # if not done:
-        #     reward = -env.get_LB()
 
         return reward, actions
 
@@ -106,40 +109,21 @@ class AgentTS(AgentGNN):
         obs, reward, done = env.get_obs(), None, env.done()
         actions = list()
 
-        model.eval()
         with torch.no_grad():
-            depth = 0
-            while not done and depth < configs.rollout_depth:
+            while not done:
                 a = self.get_action_model(obs, model=model)
+                # print(a, env.curr_t, env.target_mc)
+                # if a[0].item() == 40:
+                #     print(a, env.curr_t, env.target_mc)
+                #     print()
                 obs, reward, done = env.step(a)
-
                 actions.append(torch.concat(a))
-                depth += 1
 
                 # print(depth)
-                if depth == 83:
-                    print()
-                if 80 < depth and depth < 85:
-                    print(depth, a)
-
-            ###################################################
-            if not done:
-                for i, a in enumerate(actions):
-                    actions[i] = a.to('cpu').view(-1, 1)
-
-                agent_type = configs.agent_type
-                configs.agent_type = 'rule'
-                obs, reward, done = env.get_obs(), None, env.done()
-
-                while not done:  # and depth < configs.rollout_depth:
-                    a = env.get_action_rule(obs, ['LTT'])
-                    obs, reward, done = env.step(a)
-
-                    actions.append(a)
-                    depth += 1
-
-                configs.agent_type = agent_type
-            ###################################################
+                # if depth == 83:
+                #     print()
+                # if 80 < depth and depth < 85:
+                #     print(depth, a)
 
         if not done:
             reward = -env.get_LB()
@@ -155,44 +139,41 @@ class AgentTS(AgentGNN):
         obs_list, reward, done = env.get_obs(), None, env.done()
         actions = list()
 
-        for model in models:
-            model.eval()
         with torch.no_grad():
-            depth = 0
-            action_t = 0
-            transit_t = 0
-            while not done and depth < configs.rollout_depth:
-                s_t = time.time()
+            # action_t = 0
+            # transit_t = 0
+            while not done:
+                # s_t = time.time()
                 a_list = self.get_action_models(obs_list, models=models, env_n=len(curr_envs))
-                action_t += time.time()-s_t
-                s_t = time.time()
+                # action_t += time.time()-s_t
+                # s_t = time.time()
                 obs_list, reward, done = env.step(a_list)
-                transit_t += time.time()-s_t
+                # transit_t += time.time()-s_t
 
                 actions.append(torch.concat(a_list))
-                depth += 1
-
-        if not done:
-            reward = -env.get_LB()
 
         return reward, actions
 
     def initial_rollout(self, nodes, rules=None, models=None):
         # model ######
-        if 'multi_model' in configs.rollout_type:
-            cum_r, actions = self.rollout_models([node.curr_env for node in nodes], models)
-            a_ = torch.concat(actions).reshape(-1, len(models), len(nodes)).transpose(0, 2)
-            for i, node in enumerate(nodes):
-                j = cum_r[i, :].argmax(dim=0).item()
-                node.best_follow = a_[i, j]
-                node.UBs += [-r.item() for r in cum_r[i, :]]
+        if 'model' in configs.rollout_type:
+            if configs.beam_n == 1:
+                cum_r, actions = self.rollout_model_once([node.curr_env for node in nodes], self.model)
+                a_ = torch.concat(actions).reshape(-1, len(nodes))
+                for i, node in enumerate(nodes):
+                    node.UBs.append(-cum_r[i, 0].item())
+                    node.best_follow = a_[:, i]
+            else:
+                cum_r, actions = self.rollout_models([node.curr_env for node in nodes], models)
+                a_ = torch.concat(actions).reshape(-1, len(models), len(nodes)).transpose(0, 2)
+                for i, node in enumerate(nodes):
+                    j = cum_r[i, :].argmax(dim=0).item()
+                    node.best_follow = a_[i, j]
+                    node.UBs += [-r.item() for r in cum_r[i, :]]
 
-        elif 'model' in configs.rollout_type:
-            cum_r, actions = self.rollout_model_once([node.curr_env for node in nodes], self.model)
-            a_ = torch.concat(actions).reshape(-1, len(nodes))
-            for i, node in enumerate(nodes):
-                node.UBs.append(-cum_r[i, 0].item())
-                node.best_follow = a_[:, i]
+        elif 'prob' in configs.rollout_type:
+            for node in nodes:
+                node.UBs = [-node.prob]
 
         # rules ######
         if 'rule' in configs.rollout_type and rules:
@@ -227,12 +208,25 @@ class AgentTS(AgentGNN):
                 raise NotImplementedError
 
             # expansion #################################################
+            if 'prob' in configs.rollout_type:
+                probs = self.model(node.obs)[0]
+                greedy_a = probs.argmax()
+                # print(probs)
+
             for a in candidate_a:
+                if 'prob' in configs.rollout_type:
+                    prob_ = node.prob * probs[a].item()
+
                 a = node.obs['op_remain'][a].view(1).to('cpu')
                 env = JobShopEnv(pomo_n=1, load_envs=[node.curr_env])
                 _, reward, done = env.step([a])
 
                 node_ = Node(env, obs=None, done=done, route=node.route + [a])
+                if 'prob' in configs.rollout_type:
+                    node_.prob = prob_
+                    if greedy_a == a:
+                        node_.greedy = True
+                    # print(a, prob_)
 
                 if done:
                     new_done_nodes.append(node_)
@@ -256,7 +250,7 @@ class AgentTS(AgentGNN):
 
         return new_non_done_nodes, new_done_nodes, UB
 
-    def get_best_nodes(self, nodes, UB):
+    def get_best_nodes(self, nodes, UB):  # nodes -> sorted
         pos = len(nodes)
         for i, node in enumerate(nodes):
             if node.UB > UB:
@@ -282,8 +276,8 @@ class AgentTS(AgentGNN):
         # initial #########################################################################
         s_t = time.time()
         if existing_tree:
-            non_done_nodes, done_nodes, best_node, UB = existing_tree
-            depth = configs.depth - 1
+            non_done_nodes, done_nodes, best_node, UB, skip_depth = existing_tree
+            depth = max(0, configs.depth - skip_depth)
         else:
             node = Node(env, obs=obs, done=done)  # initial expansion
             if node.done:
@@ -306,21 +300,28 @@ class AgentTS(AgentGNN):
                 done_nodes += new_done_nodes
                 done_nodes.sort(key=lambda x: x.UB)
                 done_nodes = done_nodes[:configs.beam_n]  # too many -> cut
-                if UB_ < UB:
-                    UB = UB_
-                    best_node = done_nodes[0]
+                if 'prob' not in configs.rollout_type:
+                    if UB_ < UB:  # UB_ is updated by only done nodes in self.expansion_leaf()
+                        UB = UB_
+                        best_node = done_nodes[0]
 
             if not non_done_nodes:  # no more expansion -> break
                 break
 
             # simulation ##################################################
+            # if len(non_done_nodes) > 1:
+            #     non_done_nodes = self.initial_rollout(non_done_nodes, rules, models)
+            # else:
+            #     non_done_nodes[0].UBs = best_node.UBs
+            #     non_done_nodes[0].best_follow = best_node.best_follow[1:]
             non_done_nodes = self.initial_rollout(non_done_nodes, rules, models)
 
             non_done_nodes.sort(key=lambda x: x.UB)
-            UB_ = non_done_nodes[0].UB
-            if UB_ < UB:
-                UB = UB_
-                best_node = non_done_nodes[0]
+            if 'prob' not in configs.rollout_type:
+                UB_ = non_done_nodes[0].UB
+                if UB_ < UB:
+                    UB = UB_
+                    best_node = non_done_nodes[0]
 
             # separation  #################################################
             remain_done_nodes.clear()
@@ -361,6 +362,17 @@ class AgentTS(AgentGNN):
                     if not node.done:
                         non_done_nodes.append(node)
 
+        if 'prob' in configs.rollout_type:
+            remain_nodes = non_done_nodes + done_nodes
+            for node in remain_nodes:
+                node.update_value()
+            if 'greedy' in configs.rollout_type:
+                remain_nodes.sort(key=lambda x: (-x.greedy, x.value, x.done))  # priorities greedy path, non_done nodes
+            else:
+                remain_nodes.sort(key=lambda x: (x.value, x.done))  # priorities non_done nodes
+
+            best_node = remain_nodes[0]
+
         run_t = round(time.time() - s_t, 4)
 
         return run_t, non_done_nodes, done_nodes, best_node
@@ -371,34 +383,68 @@ class AgentTS(AgentGNN):
         return: cum_r, avg_run_t, avg_decision_t, decision_n, trajectory
         """
         # initial environment #########################################################################
-        env = JobShopEnv([problem], pomo_n=1)
+        if configs.dyn_type:
+            env = JobShopDynEnv([problem], pomo_n=1)
+        else:
+            env = JobShopEnv([problem], pomo_n=1)
         obs, reward, done = env.reset()
+        t = float('-inf')
 
         with torch.no_grad():
             configs.total_extend_n = 0
             configs.real_extend_n = 0
             configs.bound_rates = list()
-
             run_ts = list()
+            del_list = list()
 
-            start = True
+            configs.event = True
             while not done:
-                if start:
-                    run_t, non_done_nodes, done_nodes, best_node = self.get_action_beam(env, rules=rules, models=models)
-                    start = False
+                if 'prob' in configs.rollout_type or 'prt_stochastic' in configs.dyn_type:
+                    configs.event = True
+
+                if configs.event:
+                    run_t, non_done_nodes_, done_nodes_, best_node_ = self.get_action_beam(env, rules=rules, models=models)
+                    configs.event = False
+                    skip_depth = 0
                 else:
-                    run_t, non_done_nodes, done_nodes, best_node = self.get_action_beam(
-                        env, existing_tree=(non_done_nodes, done_nodes, best_node, UB), rules=rules, models=models)
+                    run_t, non_done_nodes_, done_nodes_, best_node_ = self.get_action_beam(
+                        env, existing_tree=(non_done_nodes, done_nodes, best_node, UB, skip_depth),
+                        rules=rules, models=models, )
+
+                t_ = env.curr_t[0, 0].item()
+                if configs.unit_t >= 1e6:
+                    new_assign = True
+                else:
+                    t_gap = t_ - t
+                    if t_gap * configs.unit_t >= run_t:
+                        run_ts.append(run_t)
+                        new_assign = True
+                    else:
+                        run_ts.append(0)
+                        new_assign = False
+
+                if new_assign:
+                    non_done_nodes = non_done_nodes_
+                    done_nodes = done_nodes_
+                    best_node = best_node_
+
                 if best_node.route:
                     a = best_node.route.pop(0).view(1, -1)
                 else:
                     a = best_node.best_follow[0].view(1, -1)
                     best_node.best_follow = best_node.best_follow[1:]
-                UB = best_node.UB
-                run_ts.append(run_t)
+                skip_depth += 1
+
+                obs, reward, done = env.step([a])
+                t = t_
+
+                if 'prob' in configs.rollout_type or 'prt_stochastic' in configs.dyn_type:
+                    continue
 
                 # route, best_follow update ############################
-                del_list = list()
+                UB = best_node.UB
+
+                del_list.clear()
                 for i, node in enumerate(done_nodes):
                     if node == best_node:
                         continue
@@ -412,7 +458,7 @@ class AgentTS(AgentGNN):
                 for i in reversed(del_list):
                     del done_nodes[i]
 
-                del_list = list()
+                del_list.clear()
                 for i, node in enumerate(non_done_nodes):
                     if node == best_node:
                         continue
@@ -426,41 +472,7 @@ class AgentTS(AgentGNN):
                 for i in reversed(del_list):
                     del non_done_nodes[i]
 
-                obs, reward, done = env.step([a])
-
-        return -reward.item(), sum(run_ts), len(run_ts), \
-               configs.total_extend_n, configs.real_extend_n, configs.bound_rates
-
-    def run_episode_with_beam2(self, problem=None, rules=None, models=None) -> (float, float, float, float, list):
-        """
-        perform for an env
-        return: cum_r, avg_run_t, avg_decision_t, decision_n, trajectory
-        """
-        # initial environment #########################################################################
-        env = JobShopEnv([problem], pomo_n=1)
-        obs, reward, done = env.reset()
-
-        with torch.no_grad():
-            configs.total_extend_n = 0
-            configs.real_extend_n = 0
-            configs.bound_rates = list()
-
-            run_ts = list()
-
-            while not done:
-                run_t, non_done_nodes, done_nodes, best_node = self.get_action_beam(env, rules=rules, models=models)
-
-                if best_node.route:
-                    a = best_node.route.pop(0).view(1, -1)
-                else:
-                    a = best_node.best_follow[0].view(1, -1)
-                    best_node.best_follow = best_node.best_follow[1:]
-
-                run_ts.append(run_t)
-
-                obs, reward, done = env.step([a])
-
-        return -reward.item(), sum(run_ts), len(run_ts), \
+        return -reward.item(), sum(run_ts), max(run_ts), len(run_ts), \
                configs.total_extend_n, configs.real_extend_n, configs.bound_rates
 
     def perform_beam_benchmarks(self, benchmarks, save_path='') -> None:
@@ -473,27 +485,22 @@ class AgentTS(AgentGNN):
 
         rules = get_rules(configs.rollout_n)
         models = None
-
-        if 'multi_model' in configs.rollout_type:
-            model_i_list = get_model_i_list(configs.rollout_n)
-            models = self.models_load(model_i_list)
-            for model in models:
-                model.eval()
-        elif 'model' in configs.rollout_type:
-            self.model_load()
-            self.model.to(configs.device)
-            self.model.eval()
+        if 'model' in configs.rollout_type:
+            if configs.beam_n == 1:
+                self.model_load()
+                self.model.eval()
+            else:
+                model_i_list = get_model_i_list(configs.rollout_n)
+                models = self.models_load(model_i_list)
+                for model in models:
+                    model.eval()
 
         for (benchmark, job_n, mc_n, instances) in benchmarks:
             print(benchmark, job_n, mc_n, len(instances))
 
             for i in tqdm(instances):
-                if configs.rollout_depth < 1e6:
-                    UB, run_t, decision_n, total_n, real_n, bound_rates = self.run_episode_with_beam2((
-                        benchmark, job_n, mc_n, i), rules=rules, models=models)
-                else:
-                    UB, run_t, decision_n, total_n, real_n, bound_rates = self.run_episode_with_beam((
-                        benchmark, job_n, mc_n, i), rules=rules, models=models)
+                UB, run_t, max_run_t, decision_n, total_n, real_n, bound_rates = self.run_episode_with_beam((
+                    benchmark, job_n, mc_n, i), rules=rules, models=models)
 
                 with open(save_path, 'a', newline='') as f:
                     wr = csv.writer(f)
@@ -506,32 +513,87 @@ class AgentTS(AgentGNN):
                                  configs.beam_n, configs.expansion_type, configs.value_type, configs.pruning_type,
                                  configs.q_level, configs.rollout_n, configs.rollout_type,
                                  configs.depth, configs.rollout_depth,
-                                 UB, run_t, total_n, real_n, rate, mean_bound_rate,
-                                 decision_n, round(run_t / decision_n, 4)])
+                                 UB, run_t, max_run_t, total_n, real_n, rate, mean_bound_rate,
+                                 decision_n, round(run_t / decision_n, 4),
+                                 configs.env_type, configs.model_type, configs.dyn_type, configs.parameter,
+                                 configs.dyn_reserve_reset
+                                 ])
 
 
 if __name__ == '__main__':
-    from utils import TA_small
+    from utils import small_benchmarks
 
-    save_path = f'./../result/model_beam_test.csv'
-    configs.expansion_type = 'bound_all'
+    configs.rollout_depth = 1e6
+    configs.value_type = 'best'  # quantile_LB, best, mean, norm, beta, t, chi2
+    configs.rollout_type = 'model'  # model_rule, rule, multi_model
+    configs.beam_n = 3
+    configs.rollout_n = 3
 
-    for configs.depth in [3]:
+    agent = AgentTS()
+    for problem in small_benchmarks:
+        #################################################################################################
+        save_path = f'./../result/model_beam.csv'
 
-        for configs.rollout_n in [3]:
-            for configs.value_type in ['best']:  # quantile_LB, best, mean, norm, beta, t, chi2
-                if configs.rollout_n == 1 and configs.value_type != 'best':
-                    continue
+        configs.depth = 1
+        configs.expansion_type = 'bound_all'
 
-                for configs.beam_n in [3]:  # 5
-                    if 'with_best' in configs.pruning_type and configs.beam_n == 1 and configs.value_type != 'best':
-                        continue
+        if configs.rollout_depth < 1e6 and 'bound' in configs.expansion_type:
+            raise NotImplementedError
+        if configs.rollout_n == 1 and configs.value_type != 'best':
+            raise NotImplementedError
+        if 'with_best' in configs.pruning_type and configs.beam_n == 1 and configs.value_type != 'best':
+            raise NotImplementedError
 
-                    for configs.rollout_type in ['model_rule']:  # model_rule, rule, multi_model
-                        if 'multi_model' in configs.rollout_type and configs.rollout_n == 1:
-                            continue
+        agent.perform_beam_benchmarks([problem], save_path=save_path)
 
-                        agent = AgentTS()
-                        # agent.perform_TS_benchmarks([['HUN', 6, 4, list(range(40, 50))]], save_path=save_path)
-                        agent.perform_beam_benchmarks([['HUN', 6, 6, list(range(40, 50))]], save_path=save_path)
-                        # agent.perform_beam_benchmarks(TA_small, save_path=save_path)
+        #################################################################################################
+        save_path = f'./../result/model_beam_SGBS.csv'
+
+        configs.depth = 1e6
+        configs.expansion_type = 'all'
+
+        if configs.rollout_depth < 1e6 and 'bound' in configs.expansion_type:
+            raise NotImplementedError
+        if configs.rollout_n == 1 and configs.value_type != 'best':
+            raise NotImplementedError
+        if 'with_best' in configs.pruning_type and configs.beam_n == 1 and configs.value_type != 'best':
+            raise NotImplementedError
+
+        print(configs.depth, configs.rollout_depth, configs.rollout_n, configs.value_type,
+              configs.beam_n, configs.rollout_type)
+        agent.perform_beam_benchmarks([problem], save_path=save_path)
+
+        #################################################################################################
+        save_path = f'./../result/model_beam_all.csv'
+
+        configs.depth = 1
+        configs.expansion_type = 'all'
+
+        if configs.rollout_depth < 1e6 and 'bound' in configs.expansion_type:
+            raise NotImplementedError
+        if configs.rollout_n == 1 and configs.value_type != 'best':
+            raise NotImplementedError
+        if 'with_best' in configs.pruning_type and configs.beam_n == 1 and configs.value_type != 'best':
+            raise NotImplementedError
+
+        print(configs.depth, configs.rollout_depth, configs.rollout_n, configs.value_type,
+              configs.beam_n, configs.rollout_type)
+        agent.perform_beam_benchmarks([problem], save_path=save_path)
+
+        #################################################################################################
+        save_path = f'./../result/model_beam_full_depth.csv'
+
+        configs.depth = 1e6
+        configs.expansion_type = 'bound_all'
+
+        if configs.rollout_depth < 1e6 and 'bound' in configs.expansion_type:
+            raise NotImplementedError
+        if configs.rollout_n == 1 and configs.value_type != 'best':
+            raise NotImplementedError
+        if 'with_best' in configs.pruning_type and configs.beam_n == 1 and configs.value_type != 'best':
+            raise NotImplementedError
+
+        print(configs.depth, configs.rollout_depth, configs.rollout_n, configs.value_type,
+              configs.beam_n, configs.rollout_type)
+        agent.perform_beam_benchmarks([problem], save_path=save_path)
+

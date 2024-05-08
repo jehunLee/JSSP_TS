@@ -1,22 +1,32 @@
-from utils import get_rules, TA_small
+from utils import HUN_100, HUN_200
 from params import configs
-from agent_TS import AgentTS
+from agent_BC3 import AgentBC
 
 
-configs.expansion_type = 'bound_all'
-# configs.pruning_type = 'with_best'
-# configs.action_type = 'conflict'
+# configs.agent_type = 'GNN_TS_value'
+configs.env_type = 'dyn'  # 'dyn', ''
+configs.state_type = 'mc_gap_mc_load_prt_norm'  # 'basic_norm', 'simple_norm', 'norm', 'mc_load_norm'
+configs.model_type = 'type_all_pred_GAT2'  # 'type_all_pred_GAT2'
+# configs.model_type = 'type_all_pred_GAT2'  # 'type_all_pred_GAT2'
 
-for configs.rollout_n in [1]:
-    for configs.beam_n in [1]:  # 5
-        for configs.value_type in ['best']:
-            if configs.rollout_n == 1 and configs.value_type != 'best':
-                continue
+configs.value_learn_type = 'LB_norm'
+configs.model_value_type = 'mm_global'
 
-            for configs.rollout_type in ['model']:  # model_rule
-                rules = get_rules(configs.rollout_n)
+valid_problem_set = [('TA', 15, 15, list(range(10)))]
 
-                agent = AgentTS()
+for data_set in [HUN_200]:  # HUN_2, HUN_5, HUN_10, HUN_20, HUN_30, HUN_40,
+    configs.training_len = len(data_set[0][3])
 
-                save_path = f'./../result/model_beam6.csv'
-                agent.perform_beam_benchmarks([['TA', 15, 15, [6]]], save_path=save_path, rules=rules)
+    for configs.action_type in [
+        'conflict']:  # action_types ['single_mc_conflict', 'conflict', 'buffer_being', 'single_mc_buffer', 'single_mc_buffer_being']
+        for i in [0, 1, 2, 3, 4]:
+            if i > 0:
+                configs.value_learn_type = 'LB_norm'
+                configs.model_value_type = 'mm_global'
+                agent = AgentBC(model_i=i)
+                agent.learning_opt(valid_problem_set, data_set)
+
+            configs.value_learn_type = ''
+            configs.model_value_type = 'mm_global'
+            agent = AgentBC(model_i=i)
+            agent.learning_opt(valid_problem_set, data_set)

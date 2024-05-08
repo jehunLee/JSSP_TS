@@ -1,4 +1,4 @@
-from utils import all_dyn_benchmarks, HUN_100, all_benchmarks
+from utils import all_dyn_benchmarks, HUN_100, all_benchmarks, small_benchmarks
 from params import configs
 from agent_BC import AgentBC
 import os
@@ -11,16 +11,18 @@ configs.agent_type = 'GNN_BC_policy'
 
 # configs.dyn_type = 'mc_breakdown_known'
 # parameters = [100, 200, 300, 400]
+# test_set = small_benchmarks
 
 configs.dyn_type = 'job_arrival'
 parameters = [100, 200, 300, 400]
 configs.init_batch = 2
+# test_set = all_dyn_benchmarks
+test_set = [['TA', 100, 20, list(range(10))], ['TA', 50, 20, list(range(10))]]
 
 # configs.dyn_type = 'prt_stochastic_known'
 # parameters = [0.1, 0.2, 0.3, 0.4]
+# test_set = small_benchmarks
 
-# test_set = all_dyn_benchmarks
-test_set = all_benchmarks
 
 save_folder = f'./../result/{configs.dyn_type}/'
 if not os.path.exists(save_folder):
@@ -34,7 +36,7 @@ for data_set in [HUN_100]:  # HUN_2, HUN_5, HUN_10, HUN_20, HUN_30, HUN_40,
             for configs.dyn_reserve_reset in [True, False]:
                 for i in [3]:  # 0, 1, 2,
                     agent = AgentBC(model_i=i)
-                    agent.model_load()
+                    # agent.model_load()
                     save_path = save_folder + f'result_{configs.dyn_type}_{configs.training_len}_{configs.lr}_{configs.L2_norm_w}_{i}.csv'
 
                     agent.perform_model_benchmarks(test_set, save_path=save_path)

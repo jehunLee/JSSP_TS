@@ -27,6 +27,115 @@ def load_data(benchmark: str, job_n: int, mc_n: int, instance_i: int) -> (list, 
     return job_mcs, job_prts
 
 
+def load_opt_sol(benchmark: str, job_n: int, mc_n: int, instance_i: int, sol_type: str = '') -> (list, list):
+    """
+    load optimal solution
+    """
+    problem = f'{benchmark}{job_n}x{mc_n}'
+    folder_path = f'./../benchmark/{benchmark}/{problem}'
+    if not os.path.isdir(folder_path):
+        folder_path = f'./benchmark/{benchmark}/{problem}'
+
+    opt_full_active_path = folder_path + f'/opt_full_active_{instance_i}.csv'
+    opt_active_path = folder_path + f'/opt_active_{instance_i}.csv'
+    opt_cp_path = folder_path + f'/opt_{instance_i}.csv'
+    opt_path = folder_path + f'/opt_{instance_i}.txt'
+
+    mc_seq = list()
+    mc_seq_st = list()
+    UB = 0
+    if sol_type and 'full_active' in sol_type and os.path.isfile(opt_full_active_path):  # full_active 결과 있음
+        with open(opt_full_active_path, 'r') as f:
+            rdr = csv.reader(f)
+            for i, line in enumerate(rdr):
+                if i == 0:
+                    UB = int(line[0])
+                    continue
+                mc_seq.append([int(i) for i in line])
+
+        mc_seq_st = mc_seq[mc_n:]
+        mc_seq = mc_seq[:mc_n]
+
+    elif sol_type and 'active' in sol_type and os.path.isfile(opt_active_path):  # full_active 결과 있음
+        with open(opt_active_path, 'r') as f:
+            rdr = csv.reader(f)
+            for i, line in enumerate(rdr):
+                if i == 0:
+                    UB = int(line[0])
+                    continue
+                mc_seq.append([int(i) for i in line])
+
+        mc_seq_st = mc_seq[mc_n:]
+        mc_seq = mc_seq[:mc_n]
+
+    elif os.path.isfile(opt_cp_path):  # cp 결과 있음
+        with open(opt_cp_path, 'r') as f:
+            rdr = csv.reader(f)
+            for i, line in enumerate(rdr):
+                if i == 0:
+                    UB = int(line[0])
+                    continue
+                mc_seq.append([int(i) for i in line])
+
+        mc_seq_st = mc_seq[mc_n:]
+        mc_seq = mc_seq[:mc_n]
+
+    elif os.path.isfile(opt_path):  # cp 결과 없음
+        with open(opt_path, 'r') as f:
+            lines = f.readlines()
+            for line in lines:
+                line = line.split(' ')
+                if '\n' in line[-1]:
+                    line[-1] = line[-1][:-1]
+                mc_seq.append([int(n) for n in line])
+
+    # else:  # none optimal solution
+    #     print(f'none optimal sol: problem {problem} {instance_i}')
+
+    return mc_seq, mc_seq_st, UB
+
+
+def get_opt_data_path(benchmark: str, job_n: int, mc_n: int, instances: list) -> str:
+    save_folder = f'./../opt_data/{configs.action_type}__{configs.sol_type}'
+    # if 'diff_disj_all_pred' in configs.model_type:
+    #     save_folder = f'{save_folder}__diff_disj_all_pred'
+
+    if 'all_pred' in configs.model_type:
+        save_folder = f'{save_folder}__all_pred'
+    else:
+        save_folder = f'{save_folder}__all_pred'
+
+    if not os.path.exists(save_folder):
+        os.makedirs(save_folder)
+
+    opt_data_type = f'{configs.env_type}__{configs.state_type}__{configs.policy_symmetric_TF}'
+
+    save_path = f'{save_folder}/{opt_data_type}'
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+
+    problem = f'{benchmark}{job_n}x{mc_n}_{len(instances)}'
+
+    return f'{save_path}/{problem}.p'
+
+
+def get_opt_data(problem_set):
+    opt_data = list()
+
+    for (benchmark, job_n, mc_n, instances) in problem_set:
+        save_file = get_opt_data_path(benchmark, job_n, mc_n, instances)
+
+        with open(save_file, 'rb') as file:  # rb: binary read mode
+            opt_data += pickle.load(file)
+
+    if 'cuda' in configs.device and not opt_data[0].is_cuda:
+        for data in opt_data:
+            data.to(configs.device)
+
+    print(f'opt_data load done: {len(opt_data)} optimal policies')
+    return opt_data
+
+
 # load result data #########################################################################################
 import pandas as pd
 
@@ -42,6 +151,24 @@ def get_opt_makespan_once(benchmark: str, job_n: int, mc_n: int, instance_i: int
 
     return opt_data.loc[(opt_data['benchmark'] == benchmark) & (opt_data['job_n'] == job_n)
                         & (opt_data['mc_n'] == mc_n) & (opt_data['instance_i'] == instance_i)].iloc[0]['UB']
+
+
+def get_opt_makespans(problem_set) -> list:
+    file_path = "../result/basic/bench_opt.csv"
+    if not os.path.exists(file_path):
+        file_path = "./result/basic/bench_opt.csv"
+
+    opt_data = pd.read_csv(file_path)
+    opt_data.columns = ['benchmark', 'job_n', 'mc_n', 'instance_i', 'makespan', 'convergence', 'UB', 'name', 'set']
+    opt_data['UB'] = opt_data['UB'].astype('int')
+
+    values = list()
+    for benchmark, job_n, mc_n, instance_is in problem_set:
+        for instance_i in instance_is:
+            values.append(opt_data.loc[(opt_data['benchmark'] == benchmark) & (opt_data['job_n'] == job_n)
+                            & (opt_data['mc_n'] == mc_n) & (opt_data['instance_i'] == instance_i)].iloc[0]['UB'])
+
+    return values
 
 
 def get_load_result_data(test_csv_file_name='./basic/bench_ours.csv') -> pd.DataFrame:
@@ -216,8 +343,11 @@ def get_x_dim():
     rollout_type = configs.rollout_type
     configs.rollout_type = 'model'
 
+    dyn_type = configs.dyn_type
+    configs.dyn_type = ''
     sample_env = JobShopEnv([('HUN', 4, 3, 0)], pomo_n=1)
     obs, _, _ = sample_env.reset()
+    configs.dyn_type = dyn_type
 
     in_dim_op = obs['op'].x.shape[1]
     if 'mc_node' in configs.state_type:
@@ -307,6 +437,17 @@ FLOW = [['FLOW', 10, 5, list(range(10))], ['FLOW', 10, 10, list(range(10))],
         ['FLOW', 20, 5, list(range(10))], ['FLOW', 20, 10, list(range(10))],
         ['FLOW', 50, 5, list(range(10))], ['FLOW', 50, 10, list(range(10))]]
 
+list_200 = list(range(1000))
+HUN_200 = [['HUN', 6, 4, list_200], ['HUN', 6, 6, list_200],
+           ['HUN', 8, 4, list_200], ['HUN', 8, 6, list_200], ]  # 1000
+
+list_20 = [i for i in range(200) if i % 40 < 20]
+HUN_20 = [['HUN', 6, 4, list_20], ['HUN', 6, 6, list_20],
+          ['HUN', 8, 4, list_20], ['HUN', 8, 6, list_20], ]  # 400
+
+list_100 = list(range(400)) + [i for i in range(400, 600) if i % 40 < 20]
+HUN_100 = [['HUN', 6, 4, list_100], ['HUN', 6, 6, list_100],
+           ['HUN', 8, 4, list_100], ['HUN', 8, 6, list_100], ]  # 500
 
 # dispatching rules ######################################################################################
 action_types = ['conflict', 'buffer']

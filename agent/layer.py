@@ -113,6 +113,48 @@ class GAT2_layer(nn.Module):  # GAT2 - ICLR 2022  # HOW ATTENTIVE ARE GRAPH ATTE
         return self.f_final(h_)  # multi-head concat 후 적용
 
 
+class GAT2_layer_value(nn.Module):  # GAT2 - ICLR 2022  # HOW ATTENTIVE ARE GRAPH ATTENTION NETWORKS?
+    # e(h_i, h_j) = a LeakyReLU( W [h_i||h_j] )
+    # alpha = softmax(e)
+    # h_i' = alpha * W h_j
+    def __init__(self, in_dim, out_dim, in_dim_to=1):
+        super().__init__()
+        em_dim = configs.em_dim
+
+        self.f_concats = nn.ModuleList([get_mlp(in_dim * 2, em_dim, last_act_TF=True)
+                                      for _ in range(configs.attn_head_n)])  # W^k
+        self.f_inits = nn.ModuleList([get_mlp(in_dim, em_dim)
+                                       for _ in range(configs.attn_head_n)])  # W1^k
+
+        self.As = nn.ModuleList([get_mlp(em_dim, 1)
+                                 for _ in range(configs.attn_head_n)])  # GAT2에서는 alpha 구할 때 activation x
+        self.f_final = get_mlp(em_dim * configs.attn_head_n, out_dim)  # multi-head attention concat 후 적용
+
+    def forward(self, x_from, edge_index, x_to=None):
+        src, dst = edge_index
+
+        h_cat = torch.stack([torch.cat([x_from[src], x_from[dst]], dim=1)
+                             for _ in range(configs.attn_head_n)], dim=0)  # (attn_head_n, edge_n, in_dim * 2)
+        h_cat_ = torch.stack([self.f_concats[k](h_cat[k]) for k in range(configs.attn_head_n)], dim=0)  # W^k  # (attn_head_n, edge_n, em_dim)
+        a = torch.stack([A(h_cat_[k]) for k, A in enumerate(self.As)], dim=0)  # (attn_head_n, edge_n, 1)
+
+        # softmax -> alpha
+        if len(a[0]) and a.max() > 80:
+            a = a - a.max() + 70
+        e = torch.exp(a) + 1e-32  # (attn_head_n, edge_n, 1)  # over 80 -> inf, under -100 -> 0
+        node_e_sum = torch.zeros(configs.attn_head_n, x_from.shape[0], 1, dtype=e.dtype).to(configs.device)  # (attn_head_n, node_n, 1)
+        dst_node = dst.view(-1, 1)
+        node_e_sum = torch.stack([node_e_sum[k].scatter_add_(0, dst_node, e[k])
+                                  for k in range(configs.attn_head_n)], dim=0)  # (attn_head_n, node_n, 1)
+        alpha = torch.stack([e[k] / node_e_sum[k][dst] for k in range(configs.attn_head_n)], dim=0)  # (attn_head_n, edge_n, 1)
+
+        # final
+        hs_to = torch.stack([f_init(x_from) for f_init in self.f_inits], dim=0)  # W^k  # (attn_head_n, node_n, em_dim)
+        h_ = torch.cat([aggr(hs_to[k], edge_index, alpha=alpha[k]) for k in range(configs.attn_head_n)], dim=1)  # (node_n, em_dim * attn_head_n)
+        return self.f_final(h_)  # multi-head concat 후 적용
+
+
+
 class GAT2_simple_layer(nn.Module):  # GAT2 - ICLR 2022  # HOW ATTENTIVE ARE GRAPH ATTENTION NETWORKS?
     # e(h_i, h_j) = a LeakyReLU( W [h_i||h_j] ) -> simple version: a LeakyReLU (W h_i + W h_j)
     # alpha = softmax(e)

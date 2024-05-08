@@ -4,8 +4,6 @@ from utils import load_data
 from collections import defaultdict
 from params import configs
 import torch.nn.functional as F
-from torch_geometric.data import HeteroData
-from torch_geometric.loader import DataLoader  # https://github.com/pyg-team/pytorch_geometric/issues/2961 ######
 from environment.env import JobShopEnv
 
 
@@ -132,6 +130,12 @@ class JobShopDynEnv(JobShopEnv):
         for i in range(self.env_n):
             for j in range(self.pomo_n):
                 self.events[i, j] = copy.deepcopy(self.init_events[i])
+
+        if 'job_arrival' in configs.dyn_type:
+            for i in range(self.env_n):
+                for arrival_t, _, target, _ in self.init_events[i]:
+                    for j in range(self.pomo_n):
+                        self.job_last_step[i, j, target] = self.job_step_n[i, j, target]
 
         if 'mc_breakdown' in configs.dyn_type and 'known' in configs.dyn_type:
             self.mc_break = self.init_mc_break.unsqueeze(dim=1).expand(-1, self.pomo_n, -1)
@@ -297,7 +301,7 @@ class JobShopDynEnv(JobShopEnv):
 
     def next_state(self):
         next_state = False
-
+        configs.event = False
         while not next_state:
             job_mask = torch.where(self.job_last_step < self.job_step_n, 0, self.M)
             start_t = self.job_ready_t[self.ENV_IDX_J, self.POMO_IDX_J, self.JOB_IDX, self.job_last_step] + job_mask
@@ -379,12 +383,32 @@ class JobShopDynEnv(JobShopEnv):
 
                                 # last update #######################################
                                 self.job_ready_t = self.job_ready_t_precedence + self.job_ready_t_mc_gap
+
+                                # min_start >= curr_t
+                                start_t = self.job_ready_t[i, j, self.JOB_IDX, self.job_last_step] + job_mask
+                                job_gap = self.curr_t[i, j] - self.job_ready_t[i, j, self.JOB_IDX[i, j],
+                                                                               self.job_last_step[i, j]]
+                                job_gap = torch.where(job_gap >= 0, job_gap, 0)
+                                job_gap[-1] = 0
+                                job_gap = job_gap.view(-1, 1)
+
+                                # last step 이후로  self.job_ready_t_precedence 증가
+                                last_step = self.job_last_step[i, j].view(self.max_job_n + 1, -1).expand(
+                                    -1, self.max_mc_n + 1)
+                                job_remain = torch.where(last_step <= torch.arange(self.max_mc_n + 1), 1, 0)
+                                job_gap = job_remain.mul(job_gap)
+
+                                # self.mc_done_t 도입??
+                                print()
+
                                 self.job_done_t = self.job_ready_t + self.job_durations
                                 del self.reserved[i, j]
 
                         # new job arrival -> dynamic add e_disj ###################
                         if 'job_arrival' in event_type:
                             # target: arrival job idx
+                            self.job_last_step[i, j, target] = 0
+
                             if 'rule' not in configs.agent_type:
                                 for k in range(self.job_step_n[i, j, target]):
                                     op = self.op_map[i, target, k].item()
@@ -453,6 +477,7 @@ class JobShopDynEnv(JobShopEnv):
                                 self.job_done_t[i, j] = self.job_ready_t[i, j] + self.job_durations[i, j]
 
             if event:
+                configs.event = True
                 continue
 
             # candidate job ########################################################################

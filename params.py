@@ -65,11 +65,17 @@ parser.add_argument('--beam_n', type=int, default=3, help='beam width')
 parser.add_argument('--depth', type=int, default=1e6, help='maximum depth')
 parser.add_argument('--rollout_depth', type=int, default=1e6, help='maximum rollout depth')
 
+parser.add_argument('--value_learn_type', type=str, default='', help='maximum depth')
+parser.add_argument('--model_value_type', type=str, default='mm_global', help='maximum rollout depth')
+
+parser.add_argument('--unit_t', type=float, default=1e6, help='maximum rollout depth')
+
 #####################################################
 parser.add_argument('--RL_max_ep_n', type=int, default=500, help='number of learning epochs')
 parser.add_argument('--train_env_n', type=int, default=20, help='number of learning epochs')
 parser.add_argument('--gamma', type=float, default=0.9, help='number of learning epochs')
-parser.add_argument('--lr', type=float, default=1e-2, help='learning rate')
+
+parser.add_argument('--lr', type=float, default=1e-6, help='learning rate')
 
 
 configs = parser.parse_args()

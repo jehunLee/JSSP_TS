@@ -1,6 +1,6 @@
 from utils import all_benchmarks, HUN_100
 from params import configs
-from agent_BC import AgentBC
+from agent_BC3 import AgentBC
 
 configs.agent_type = 'GNN_BC_policy'
 
@@ -31,13 +31,13 @@ for data_set in [HUN_100]:  # HUN_2, HUN_5, HUN_10, HUN_20, HUN_30, HUN_40,
 
         configs.training_len = len(data_set[0][3])
 
-        for i in [0, 1, 2, 3, 4]:
+        for i in [3]:
             agent = AgentBC(model_i=i)
             agent.model_load()
-            save_path = f'./../result/result_ablation_{configs.training_len}_{configs.lr}_{configs.L2_norm_w}_{i}.csv'
+            save_path = f'./../result/result_{configs.training_len}_{configs.lr}_{configs.L2_norm_w}_{i}.csv'
 
             agent.perform_model_benchmarks(all_benchmarks, save_path=save_path)
-
+            print()
     # from environment.env import JobShopEnv
     # env = JobShopEnv('HUN', 6, 4, 0)
     # cum_r, run_t, _, _, _ = agent.run_episode(env, test_TF=True)
